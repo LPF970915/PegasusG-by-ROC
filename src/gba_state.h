@@ -15,6 +15,7 @@ struct GbaGameState {
   bool has_core = false;
   bool core_overridden = false;
   bool legacy_core = false;
+  std::uint64_t favorite_order = 0;
 };
 
 class GbaStateStore {

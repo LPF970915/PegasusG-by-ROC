@@ -75,6 +75,18 @@ initialize_game_db() {
 }
 
 prepare_volume() {
+  case "${2:--1}" in
+    0)
+      level="$(cat "$STATE_DIR/volume.level" 2>/dev/null || printf '6')"
+      case "$level" in 0|1|2|3|4|5|6|7|8|9) ;; *) level=6 ;; esac
+      ;;
+    1|2|3|4|5|6|7|8|9) level="$2" ;;
+    *) level="" ;;
+  esac
+  if [ -n "$level" ]; then
+    write_ra_db "$(frontend_attenuation "$level")"
+    return
+  fi
   schema="$(cat "$SCHEMA_FILE" 2>/dev/null || true)"
   value="$(cat "$GAME_VOLUME_DB" 2>/dev/null || true)"
   if [ "$schema" != "$SCHEMA_VERSION" ] || ! valid_db "$value"; then
@@ -92,7 +104,7 @@ capture_volume() {
 }
 
 case "$ACTION" in
-  prepare) prepare_volume ;;
+  prepare) prepare_volume "$@" ;;
   capture) capture_volume ;;
-  *) echo "usage: $0 prepare|capture" >&2; exit 2 ;;
+  *) echo "usage: $0 prepare [0=sync|1-9]|capture" >&2; exit 2 ;;
 esac

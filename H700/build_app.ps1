@@ -3,6 +3,9 @@ param(
   [string]$Version = "1.08",
   [ValidateSet("Stage", "Zip")]
   [string]$Output = "Stage",
+  [ValidateSet("Sysroot", "Docker")]
+  [string]$Builder = "Sysroot",
+  [switch]$SkipBuild,
   [string]$Sysroot = "",
   [string]$MusicSource = "",
   [string]$FontSource = "",
@@ -14,7 +17,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if (-not $Sysroot) {
   $Sysroot = Join-Path $repoRoot "H700\sysroot"
 }
-if (-not (Test-Path -LiteralPath $Sysroot -PathType Container)) {
+if (-not $SkipBuild -and $Builder -eq "Sysroot" -and -not (Test-Path -LiteralPath $Sysroot -PathType Container)) {
   throw "Missing H700 sysroot: $Sysroot. Provide -Sysroot with a target sysroot or place one at H700\sysroot."
 }
 if (-not $MusicSource) {
@@ -32,18 +35,24 @@ function WslPath([string]$Path) {
 }
 
 $rootWsl = WslPath $repoRoot
-$sysrootWsl = WslPath $Sysroot
 $musicWsl = WslPath $MusicSource
-$fontArg = ""
+$buildEnvironment = @(
+  "PEGASUSG_VERSION=$Version", "PEGASUSG_OUTPUT=$Output", "PEGASUSG_BUILDER=$Builder",
+  "PEGASUSG_SKIP_BUILD=$([int]$SkipBuild.IsPresent)", "PEGASUSG_MUSIC_SOURCE=$musicWsl"
+)
+if (-not $SkipBuild -and $Builder -eq "Sysroot") {
+  $buildEnvironment += "PEGASUSG_SYSROOT=$(WslPath $Sysroot)"
+}
+if ($env:PEGASUSG_BUILDER_IMAGE) {
+  $buildEnvironment += "PEGASUSG_BUILDER_IMAGE=$env:PEGASUSG_BUILDER_IMAGE"
+}
 if ($FontSource) {
   if (-not (Test-Path -LiteralPath $FontSource -PathType Leaf)) {
     throw "Missing font source: $FontSource"
   }
-  $fontWsl = WslPath $FontSource
-  $fontArg = " PEGASUSG_FONT_SOURCE='$fontWsl'"
+  $buildEnvironment += "PEGASUSG_FONT_SOURCE=$(WslPath $FontSource)"
 }
-$cmd = "cd '$rootWsl' && chmod +x ./H700/build_app.sh && PEGASUSG_VERSION='$Version' PEGASUSG_OUTPUT='$Output' PEGASUSG_SYSROOT='$sysrootWsl' PEGASUSG_MUSIC_SOURCE='$musicWsl'$fontArg bash ./H700/build_app.sh"
-wsl -d $Distro -- bash -lc $cmd
+wsl -d $Distro -- env @buildEnvironment bash "$rootWsl/H700/build_app.sh"
 if ($LASTEXITCODE -ne 0) { throw "H700 app build failed with exit code $LASTEXITCODE" }
 
 if ($Output -eq "Zip") {

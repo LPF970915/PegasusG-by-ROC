@@ -9,6 +9,8 @@ APP_ENTRY_NAME="${PEGASUSG_APP_ENTRY_NAME:-PegasusG by ROC}"
 BINARY_NAME="${PEGASUSG_BINARY_NAME:-pegasusg_by_roc}"
 VERSION="${PEGASUSG_VERSION:-1.08}"
 OUTPUT="${PEGASUSG_OUTPUT:-Stage}"
+BUILDER="${PEGASUSG_BUILDER:-Sysroot}"
+SKIP_BUILD="${PEGASUSG_SKIP_BUILD:-0}"
 SYSROOT="${PEGASUSG_SYSROOT:-$REPO_ROOT/H700/sysroot}"
 MUSIC_SOURCE="${PEGASUSG_MUSIC_SOURCE:-$REPO_ROOT/assets/music/builtin}"
 FONT_SOURCE="${PEGASUSG_FONT_SOURCE:-}"
@@ -31,61 +33,81 @@ ARCHIVE="$SELF_DIR/Downloads/PegasusG by ROC ver${VERSION} for H700 - Full Packa
 
 case "$OUTPUT" in Stage|Zip) ;; *) echo "[h700] PEGASUSG_OUTPUT must be Stage or Zip" >&2; exit 2 ;; esac
 
-if [ ! -d "$SYSROOT/usr/include" ] || [ ! -d "$SYSROOT/usr/lib" ]; then
-  echo "[h700] invalid sysroot: $SYSROOT" >&2
-  exit 1
+case "$BUILDER" in Sysroot|Docker) ;; *) echo "[h700] PEGASUSG_BUILDER must be Sysroot or Docker" >&2; exit 2 ;; esac
+
+if [ "$SKIP_BUILD" != 1 ]; then
+  mkdir -p "$BUILD_DIR"
+  if [ "$BUILDER" = Docker ]; then
+    image="${PEGASUSG_BUILDER_IMAGE:-ghcr.io/monkeyx-net/portmaster-build-templates/portmaster-builder:aarch64-latest}"
+    docker image inspect "$image" >/dev/null 2>&1 || docker pull --platform=linux/arm64 "$image"
+    compiler=(docker run --rm --pull=never --network=none --platform=linux/arm64
+      -v "$REPO_ROOT:$REPO_ROOT:ro" -v "$BUILD_DIR:$BUILD_DIR"
+      -e "PEGASUSG_BINARY=$BUILD_DIR/$BINARY_NAME" "$image" bash -c '
+        set -e
+        g++ "$@" $(pkg-config --cflags --libs sdl2 SDL2_image SDL2_ttf alsa)
+        strip "$PEGASUSG_BINARY"
+        "$PEGASUSG_BINARY" --help
+      ' --)
+    compiler_flags=()
+    pkg_cflags=""
+    pkg_libs=""
+  else
+    if [ ! -d "$SYSROOT/usr/include" ] || [ ! -d "$SYSROOT/usr/lib" ]; then
+      echo "[h700] invalid sysroot: $SYSROOT" >&2
+      exit 1
+    fi
+    command -v "$CXX_CMD" >/dev/null 2>&1 || { echo "[h700] missing compiler: $CXX_CMD" >&2; exit 1; }
+
+    find_pkg_dirs() {
+      for d in \
+        "$SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig" \
+        "$SYSROOT/lib/aarch64-linux-gnu/pkgconfig" \
+        "$SYSROOT/usr/lib/pkgconfig" \
+        "$SYSROOT/lib/pkgconfig" \
+        "$SYSROOT/usr/share/pkgconfig"; do
+        [ -d "$d" ] && printf "%s:" "$d"
+      done
+    }
+
+    PKG_LIBDIR="$(find_pkg_dirs || true)"
+    PKG_LIBDIR="${PKG_LIBDIR%:}"
+    export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
+    export PKG_CONFIG_LIBDIR="$PKG_LIBDIR"
+    export PKG_CONFIG_PATH=""
+
+    pkg_cflags="$("$PKG_CMD" --cflags sdl2 SDL2_image SDL2_ttf 2>/dev/null || true)"
+    pkg_libs="$("$PKG_CMD" --libs sdl2 SDL2_image SDL2_ttf alsa 2>/dev/null || true)"
+    if [ -z "$pkg_cflags" ]; then
+      pkg_cflags="-I$SYSROOT/usr/include/SDL2 -I$SYSROOT/usr/include -D_REENTRANT"
+    fi
+    if [ -z "$pkg_libs" ]; then
+      pkg_libs="-L$SYSROOT/usr/lib -L$SYSROOT/usr/lib/aarch64-linux-gnu -L$SYSROOT/lib/aarch64-linux-gnu -lSDL2_image -lSDL2_ttf -lSDL2 -lasound"
+    fi
+    compiler=("$CXX_CMD")
+    compiler_flags=(--sysroot="$SYSROOT"
+      -Wl,-rpath-link,"$SYSROOT/usr/lib/aarch64-linux-gnu"
+      -Wl,-rpath-link,"$SYSROOT/lib/aarch64-linux-gnu"
+      -Wl,-rpath-link,"$SYSROOT/usr/lib"
+      -Wl,-rpath-link,"$SYSROOT/lib"
+      -Wl,--allow-shlib-undefined)
+  fi
+  "${compiler[@]}" "${compiler_flags[@]}" \
+    -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Wpedantic -pthread \
+    -I"$REPO_ROOT/src" $pkg_cflags \
+    "$REPO_ROOT/src/main.cpp" \
+    "$REPO_ROOT/src/gba_frontend.cpp" \
+    "$REPO_ROOT/src/gba_preferences.cpp" \
+    "$REPO_ROOT/src/gba_state.cpp" \
+    "$REPO_ROOT/src/gba_ui_state.cpp" \
+    "$REPO_ROOT/src/h700_services.cpp" \
+    "$REPO_ROOT/src/library_scanner.cpp" \
+    "$REPO_ROOT/src/optimized_image_path.cpp" \
+    "$REPO_ROOT/src/pegasus_metadata.cpp" \
+    "$REPO_ROOT/src/video_preview.cpp" \
+    -o "$BUILD_DIR/$BINARY_NAME" \
+    $pkg_libs \
+    -pthread
 fi
-command -v "$CXX_CMD" >/dev/null 2>&1 || { echo "[h700] missing compiler: $CXX_CMD" >&2; exit 1; }
-
-find_pkg_dirs() {
-  for d in \
-    "$SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig" \
-    "$SYSROOT/lib/aarch64-linux-gnu/pkgconfig" \
-    "$SYSROOT/usr/lib/pkgconfig" \
-    "$SYSROOT/lib/pkgconfig" \
-    "$SYSROOT/usr/share/pkgconfig"; do
-    [ -d "$d" ] && printf "%s:" "$d"
-  done
-}
-
-PKG_LIBDIR="$(find_pkg_dirs || true)"
-PKG_LIBDIR="${PKG_LIBDIR%:}"
-export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
-export PKG_CONFIG_LIBDIR="$PKG_LIBDIR"
-export PKG_CONFIG_PATH=""
-
-pkg_cflags="$("$PKG_CMD" --cflags sdl2 SDL2_image SDL2_ttf 2>/dev/null || true)"
-pkg_libs="$("$PKG_CMD" --libs sdl2 SDL2_image SDL2_ttf alsa 2>/dev/null || true)"
-if [ -z "$pkg_cflags" ]; then
-  pkg_cflags="-I$SYSROOT/usr/include/SDL2 -I$SYSROOT/usr/include -D_REENTRANT"
-fi
-if [ -z "$pkg_libs" ]; then
-  pkg_libs="-L$SYSROOT/usr/lib -L$SYSROOT/usr/lib/aarch64-linux-gnu -L$SYSROOT/lib/aarch64-linux-gnu -lSDL2_image -lSDL2_ttf -lSDL2 -lasound"
-fi
-
-mkdir -p "$BUILD_DIR"
-"$CXX_CMD" \
-  --sysroot="$SYSROOT" \
-  -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Wpedantic -pthread \
-  -I"$REPO_ROOT/src" $pkg_cflags \
-  "$REPO_ROOT/src/main.cpp" \
-  "$REPO_ROOT/src/gba_frontend.cpp" \
-  "$REPO_ROOT/src/gba_preferences.cpp" \
-  "$REPO_ROOT/src/gba_state.cpp" \
-  "$REPO_ROOT/src/gba_ui_state.cpp" \
-  "$REPO_ROOT/src/h700_services.cpp" \
-  "$REPO_ROOT/src/library_scanner.cpp" \
-  "$REPO_ROOT/src/optimized_image_path.cpp" \
-  "$REPO_ROOT/src/pegasus_metadata.cpp" \
-  "$REPO_ROOT/src/video_preview.cpp" \
-  -o "$BUILD_DIR/$BINARY_NAME" \
-  $pkg_libs \
-  -pthread \
-  -Wl,-rpath-link,"$SYSROOT/usr/lib/aarch64-linux-gnu" \
-  -Wl,-rpath-link,"$SYSROOT/lib/aarch64-linux-gnu" \
-  -Wl,-rpath-link,"$SYSROOT/usr/lib" \
-  -Wl,-rpath-link,"$SYSROOT/lib" \
-  -Wl,--allow-shlib-undefined
 
 rm -rf "$STAGE_ROOT"
 mkdir -p "$RUNTIME/assets/cheats" "$RUNTIME/assets/cores" "$RUNTIME/assets/core_options/mGBA" "$RUNTIME/assets/filters/shaders" "$RUNTIME/assets/recommended_controls/core" "$RUNTIME/assets/recommended_controls/remaps" "$RUNTIME/assets/splash" "$RUNTIME/assets/fonts" "$RUNTIME/assets/music" "$RUNTIME/assets/ui" "$RUNTIME/config" \

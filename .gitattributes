@@ -1,5 +1,7 @@
 * text=auto
 *.sh text eol=lf
+*.py text eol=lf
+*.opt text eol=lf
 Makefile text eol=lf
 *.ps1 text eol=crlf
 *.mp3 binary

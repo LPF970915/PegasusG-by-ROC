@@ -37,12 +37,22 @@ void GbaStateStore::Load(std::vector<GbaGame> *games) {
                                 GbaCoreFromStorageName(core),
                                 has_core, has_override && core_overridden == "1",
                                 has_core && !has_override};
+      std::string favorite_order;
+      if (std::getline(row, favorite_order, '\t')) {
+        std::uint64_t order = 0;
+        const auto parsed_order = std::from_chars(favorite_order.data(),
+            favorite_order.data() + favorite_order.size(), order);
+        if (parsed_order.ec == std::errc() &&
+            parsed_order.ptr == favorite_order.data() + favorite_order.size())
+          states[id].favorite_order = order;
+      }
     }
   }
   for (GbaGame &game : *games) {
     const auto found = states.find(game.id);
     if (found == states.end()) continue;
     game.favorite = found->second.favorite;
+    game.favorite_order = game.favorite ? found->second.favorite_order : 0;
     game.recent_order = found->second.recent_order;
     if (found->second.has_core) {
       const GbaCore legacy_default = game.is_rumble ? GbaCore::Gpsp : GbaCore::Mgba;
@@ -65,13 +75,14 @@ bool GbaStateStore::Save(const std::vector<GbaGame> &games) const {
   {
     std::ofstream output(temporary, std::ios::trunc);
     if (!output) return false;
-    output << "# id\tfavorite\trecent_order\tcore\tcore_overridden\n";
+    output << "# id\tfavorite\trecent_order\tcore\tcore_overridden\tfavorite_order\n";
     for (const GbaGame &game : games) {
       if (!game.favorite && game.recent_order == 0 && !game.core_overridden) continue;
       output << game.id << '\t' << (game.favorite ? 1 : 0) << '\t'
              << game.recent_order << '\t'
              << GbaCoreStorageName(game.core) << '\t'
-             << (game.core_overridden ? 1 : 0) << '\n';
+             << (game.core_overridden ? 1 : 0) << '\t'
+             << game.favorite_order << '\n';
     }
     if (!output) return false;
   }

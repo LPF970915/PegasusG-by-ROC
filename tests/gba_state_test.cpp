@@ -20,6 +20,7 @@ int main() {
   games[0].core_overridden = true;
   games[1].id = "game-b";
   games[1].favorite = true;
+  games[1].favorite_order = 9;
   games[1].recent_order = 42;
   games[2].id = "game-rumble";
   games[2].is_rumble = true;
@@ -60,6 +61,7 @@ int main() {
   assert(loaded[0].recent_order == 0);
   assert(loaded[1].core == GbaCore::Mgba);
   assert(loaded[1].favorite);
+  assert(loaded[1].favorite_order == 9);
   assert(loaded[1].recent_order == 42);
   assert(loaded[2].core == GbaCore::Gpsp);
   assert(std::string(GbaLaunchCoreName(loaded[2])) == "gpsp_rumble");
@@ -75,6 +77,7 @@ int main() {
   loaded[0].core_overridden = false;
   store.Load(&loaded);
   assert(loaded[0].favorite);
+  assert(loaded[0].favorite_order == 0);
   assert(loaded[0].recent_order == 7);
   assert(loaded[0].core == GbaCore::Gpsp);
   assert(!loaded[0].core_overridden);

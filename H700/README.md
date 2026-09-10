@@ -16,6 +16,18 @@ default music source is `assets\music\builtin\`, which contains the selected
 11-track set. Override it with `-MusicSource` when building with a complete,
 separately licensed collection.
 
+The Docker builder uses the same staging and package flow:
+
+```powershell
+.\H700\build_app.ps1 -Builder Docker -Distro Ubuntu-24.04 -Output Stage -Version 1.08
+.\H700\build_app.ps1 -SkipBuild -Distro Ubuntu-24.04 -Output Zip -Version 1.08
+```
+
+See the [root README](../README.md#h700-cross-build) for Docker/WSL setup.
+`-MusicSource`, `-FontSource`, `-Version` and `-Output` work with both builders.
+The shell equivalents are `PEGASUSG_BUILDER=Docker` and
+`PEGASUSG_SKIP_BUILD=1`; `make packzip` uses the latter with `PEGASUSG_OUTPUT=Zip`.
+
 ## Split Packages
 
 After a staging build:
@@ -76,3 +88,43 @@ contract.
 The launcher stores state and logs under `/mnt/data/pegasusg-by-roc/`. See
 `docs/PORTING_GUIDE.md` for adapting mount points, input mappings, power
 services and splash targets to another H700-class machine.
+
+## Controls
+
+| Button | Main screen | Search keyboard |
+| --- | --- | --- |
+| D-pad | Select a game | Select a key |
+| A | Launch / select | Activate the selected key |
+| B / Menu | Settings, Help, Exit | Cancel without applying |
+| X | Full-screen grid | Backspace; hold for faster repeat |
+| Y | Quick settings | Space |
+| L1 / R1 | Previous / next category | L1 changes case |
+| L2 | Next theme colour | |
+| R2 | Search | |
+| Select | Toggle favourite | Clear input |
+| Start | Select game core | Apply search |
+
+Quick settings share their values with Settings. L2 also changes the theme
+while this menu is open. Exit offers Return to system, Shut down and Cancel;
+Cancel is selected initially. Favourites display a heart even when cover
+titles are hidden. Favourites appear first, earliest added first, and the
+selected game remains selected after adding or removing a favourite. Removing
+one from the Favourites category returns to its native category. Older saved
+favourites without ordering metadata retain their original relative order.
+The full-screen grid does not play preview video.
+
+Descriptions scroll automatically and pause while a menu or search is open.
+The right-aligned hints stay within the grid area; A/B hints are omitted first
+when space is limited. Active search text has its own background.
+
+Search filters the current category and remains active across category changes.
+`口袋妖怪`, `kou dai yao guai` and `kdyg` all match 口袋妖怪. Use `v` for ü.
+The bundled table uses each character's first reading, not a phrase dictionary.
+On a desktop, type using the system keyboard/IME; Enter applies, Backspace
+deletes and Escape cancels. `PEGASUSG_FONT` selects a font for preview screenshots.
+
+Frontend Volume controls frontend playback. System Volume offers Sync
+(the default) or a fixed level from 1 to 9. Sync inherits the frontend volume,
+including mute, when starting a game. Fixed levels remain independent of the
+frontend setting. The launch request carries this setting to `launch.sh` and
+`tools/game_volume.sh`; update both scripts along with the executable.

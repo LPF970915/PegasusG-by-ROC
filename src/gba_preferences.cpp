@@ -23,9 +23,10 @@ bool GbaPreferencesStore::Load(GbaPreferences *preferences) const {
   int filter_mode = static_cast<int>(GbaFilterMode::Calibrated);
   int use_pegasus_splash = 1;
   int use_recommended_controls = 1;
+  int system_volume = 0;
   int maximum_theme_color = 3;
   if (!(input >> version >> bgm_mode >> grid_size)) return false;
-  if (version == 10) {
+  if (version == 10 || version == 11) {
     maximum_theme_color = kGbaThemeColorCount - 1;
     if (!(input >> theme_color >> cover_title_size_level >> description_size_level >>
           show_cover_titles >> fullscreen_grid >> preview_video_loop >> filter_mode >>
@@ -78,10 +79,12 @@ bool GbaPreferencesStore::Load(GbaPreferences *preferences) const {
   } else if (version != 1) {
     return false;
   }
+  if (version == 11 && !(input >> system_volume)) return false;
   if (bgm_mode < 0 || bgm_mode > 2 || grid_size < 0 || grid_size > 2 ||
       theme_color < 0 || theme_color > maximum_theme_color ||
       cover_title_size_level < 0 || cover_title_size_level > 5 ||
       description_size_level < 0 || description_size_level > 5 ||
+      system_volume < 0 || system_volume > 9 ||
       show_cover_titles < 0 || show_cover_titles > 1 ||
       fullscreen_grid < 0 || fullscreen_grid > 1 ||
       preview_video_loop < 0 || preview_video_loop > 1 ||
@@ -90,6 +93,7 @@ bool GbaPreferencesStore::Load(GbaPreferences *preferences) const {
       use_pegasus_splash < 0 || use_pegasus_splash > 1) {
     return false;
   }
+  preferences->system_volume = system_volume;
   preferences->bgm_mode = static_cast<GbaBgmMode>(bgm_mode);
   preferences->grid_size = static_cast<GbaGridSize>(grid_size);
   preferences->theme_color = static_cast<GbaThemeColor>(theme_color);
@@ -112,7 +116,7 @@ bool GbaPreferencesStore::Save(const GbaPreferences &preferences) const {
   {
     std::ofstream output(temporary, std::ios::trunc);
     if (!output) return false;
-    output << 10 << ' ' << static_cast<int>(preferences.bgm_mode) << ' '
+    output << 11 << ' ' << static_cast<int>(preferences.bgm_mode) << ' '
            << static_cast<int>(preferences.grid_size) << ' '
            << static_cast<int>(preferences.theme_color) << ' '
            << preferences.cover_title_size_level << ' '
@@ -122,7 +126,8 @@ bool GbaPreferencesStore::Save(const GbaPreferences &preferences) const {
            << (preferences.preview_video_loop ? 1 : 0) << ' '
            << static_cast<int>(preferences.filter_mode) << ' '
            << (preferences.use_pegasus_splash ? 1 : 0) << ' '
-           << (preferences.use_recommended_controls ? 1 : 0) << '\n';
+           << (preferences.use_recommended_controls ? 1 : 0) << ' '
+           << preferences.system_volume << '\n';
     if (!output) return false;
   }
   fs::rename(temporary, path, error);

@@ -37,6 +37,7 @@ struct GbaFrontendOptions {
 };
 
 class GbaFrontend {
+  friend struct GbaFrontendInteractionTest;
  public:
   explicit GbaFrontend(GbaFrontendOptions options);
   ~GbaFrontend();
@@ -50,7 +51,7 @@ class GbaFrontend {
     ToggleTitles, ToggleChrome, DescriptionUp, DescriptionDown,
     JumpUpHundred, JumpDownHundred, GridSmaller, GridLarger,
     QuickTheme, NextBgm, TabPrevious, TabNext, CoreMenu,
-    Menu, MenuPress, MenuRelease, VolumeDown, VolumeUp, Power,
+    Menu, QuickMenu, Search, SearchDone, MenuPress, MenuRelease, VolumeDown, VolumeUp, Power,
   };
 
   struct TextTexture {
@@ -114,6 +115,15 @@ class GbaFrontend {
   void RenderCoreMenu();
   void RenderVersionMenu();
   void RenderOsd();
+  void RenderHints();
+  void DrawIcon(int index, const SDL_Rect &bounds, SDL_Color color);
+  void RenderSidebar();
+  void RenderExitDialog();
+  void RenderQuickMenu();
+  void AdjustSetting(int index, Action action);
+  void RenderSearch();
+  void HandleSearch(Action action);
+  void OpenSearch();
   void DrawText(const std::string &text, int x, int y, int size, SDL_Color color,
                 int max_width = 0, bool right_align = false);
   void DrawCoverTitle(const std::string &text, const SDL_Rect &bounds, int size,
@@ -161,6 +171,23 @@ class GbaFrontend {
   bool description_highlighted_ = false;
   std::vector<int> visible_;
   bool settings_open_ = false;
+  bool sidebar_open_ = false;
+  bool exit_dialog_open_ = false;
+  int exit_dialog_selected_ = 2;
+  bool quick_menu_open_ = false;
+  bool help_open_ = false;
+  int sidebar_selected_ = 0;
+  bool search_open_ = false;
+  bool keyboard_upper_ = false;
+  int keyboard_row_ = 1;
+  int keyboard_column_ = 0;
+  std::string search_query_;
+  std::string search_draft_;
+  std::string search_composition_;
+  std::vector<std::string> search_keys_;
+  bool left_trigger_held_ = false;
+  bool right_trigger_held_ = false;
+  Uint32 description_next_at_ = 0;
   int settings_selected_ = 0;
   int settings_scroll_ = 0;
   bool core_menu_open_ = false;
@@ -190,6 +217,9 @@ class GbaFrontend {
   bool menu_button_held_ = false;
   bool menu_chord_used_ = false;
   Action held_grid_action_ = Action::None;
+  bool backspace_held_ = false;
+  Uint32 backspace_started_at_ = 0;
+  Uint32 next_backspace_at_ = 0;
   Action held_description_action_ = Action::None;
   Uint32 next_grid_repeat_at_ = 0;
   Uint32 next_description_repeat_at_ = 0;
@@ -211,6 +241,7 @@ class GbaFrontend {
   int prewarmed_descriptions_ = 0;
   VideoPreview video_;
   SDL_Texture *video_texture_ = nullptr;
+  SDL_Texture *icons_texture_ = nullptr;
   std::uint64_t video_version_ = 0;
   std::string selected_video_path_;
   std::string selected_eight_bit_track_;

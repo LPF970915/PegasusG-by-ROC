@@ -196,6 +196,8 @@ launch_requested_game() {
   IFS= read -r rom <"$REQUEST" || rom=""
   core_choice="$(sed -n '2p' "$REQUEST")"
   filter_mode="$(sed -n '3p' "$REQUEST")"
+  system_volume="$(sed -n '4p' "$REQUEST")"
+  case "$system_volume" in 0|1|2|3|4|5|6|7|8|9) ;; *) system_volume=-1 ;; esac
   rm -f "$REQUEST"
   case "$filter_mode" in calibrated|original|custom) ;; *) filter_mode=calibrated ;; esac
   case "$rom" in
@@ -244,7 +246,7 @@ launch_requested_game() {
     log_line "[launcher] game override script missing: $GAME_OVERRIDES_SCRIPT"
   fi
   game_volume_ready=0
-  if [ -x "$GAME_VOLUME_SCRIPT" ] && "$GAME_VOLUME_SCRIPT" prepare; then
+  if [ -x "$GAME_VOLUME_SCRIPT" ] && "$GAME_VOLUME_SCRIPT" prepare "$system_volume"; then
     game_volume_ready=1
     set_game_hardware_volume || {
       game_volume_ready=0
@@ -259,7 +261,7 @@ launch_requested_game() {
   unset LD_PRELOAD
   /mnt/mod/ctrl/RA_launch.sh "$core" "$launch_rom" auto >>"$LOG_FILE" 2>&1
   rc=$?
-  if [ "$game_volume_ready" -eq 1 ]; then
+  if [ "$game_volume_ready" -eq 1 ] && [ "$system_volume" -eq -1 ]; then
     "$GAME_VOLUME_SCRIPT" capture || log_line "[launcher] failed to preserve game volume"
   fi
   if [ -x "$GAME_OVERRIDES_SCRIPT" ]; then

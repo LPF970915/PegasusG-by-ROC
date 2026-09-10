@@ -52,3 +52,40 @@ vba_next_libretro.so     SHA256 FA56172A8BF69762936A8328432519B1310BC0F49C5BA692
   public redistribution.
 - `assets/cheats/gba-auto-cheats.zip` is a data collection, not source code;
   its individual entries may have separate authors and redistribution terms.
+
+## Offline pinyin search data
+
+`src/pinyin_table.inc` is generated from
+[mozillazg/pinyin-data v0.13.0](https://github.com/mozillazg/pinyin-data/tree/v0.13.0),
+Copyright (c) 2016 mozillazg, under the MIT license. The complete license is
+included in `third_party/licenses/pinyin-data-LICENSE`. It uses the first
+reading of each character, with tones removed and ü represented as v.
+Regenerate with `python tools/generate_pinyin_table.py /path/to/pinyin.txt`.
+
+## UI bitmap icons
+
+Seven round icons are from [Google Material Icons](https://github.com/google/material-design-icons),
+revision `0cbb08816df07faaae3dca060d4ebb10b66c214f`, under Apache-2.0.
+The full license is `third_party/licenses/material-icons-LICENSE`. Original
+SVGs are embedded unchanged in `tools/generate_ui_icons.cpp`:
+
+| Icon | Upstream path below `src/` |
+| --- | --- |
+| Case | editor/text_fields/materialiconsround/24px.svg |
+| Space | editor/space_bar/materialiconsround/24px.svg |
+| Backspace | content/backspace/materialiconsround/24px.svg |
+| Cancel | hardware/keyboard_return/materialiconsround/24px.svg |
+| Apply | action/check_circle/materialiconsround/24px.svg |
+| Clear | content/delete_sweep/materialiconsround/24px.svg |
+| Favourite | action/favorite/materialiconsround/24px.svg |
+
+The generator averages 4x4 samples into 28x28 alpha bitmaps, the only change
+to the graphics. Regenerate the committed atlas using SDL2 and SDL_image >= 2.6:
+
+```sh
+g++ tools/generate_ui_icons.cpp $(pkg-config --cflags --libs sdl2 SDL2_image) -o build/generate_ui_icons
+./build/generate_ui_icons > src/ui_icons_bitmap.h
+```
+
+Runtime uploads the atlas as a cached texture; SVG support is only needed
+when regenerating it, not when building or running the frontend.

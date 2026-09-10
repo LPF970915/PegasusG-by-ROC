@@ -1,4 +1,5 @@
 CXX ?= g++
+.DEFAULT_GOAL := all
 PKG_CONFIG ?= pkg-config
 TARGET ?= build/pegasusg_by_roc.exe
 
@@ -27,6 +28,24 @@ OBJECTS := $(patsubst src/%.cpp,build/obj/%.o,$(SOURCES))
 DEPENDS := $(OBJECTS:.o=.d)
 
 .PHONY: all clean test screenshots
+
+.PHONY: packzip
+packzip:
+	PEGASUSG_SKIP_BUILD=1 PEGASUSG_OUTPUT=Zip $(if $(VERSION),PEGASUSG_VERSION="$(VERSION)") bash H700/build_app.sh
+
+build/game_search_test.exe: tests/game_search_test.cpp src/game_search.h src/pinyin_table.inc
+	@mkdir -p $(dir $@)
+	$(CXX) -Isrc $(CXXFLAGS) $< -o $@
+
+build/gba_frontend_interaction_test.exe: tests/gba_frontend_interaction_test.cpp $(filter-out build/obj/main.o,$(OBJECTS))
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@ $(LDLIBS)
+
+test: test-interaction
+
+.PHONY: test-interaction
+test-interaction: build/game_search_test.exe build/gba_frontend_interaction_test.exe
+	./build/game_search_test.exe
+	./build/gba_frontend_interaction_test.exe
 
 all: $(TARGET)
 
