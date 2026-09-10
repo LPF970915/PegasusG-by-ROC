@@ -145,6 +145,8 @@ class GbaFrontend {
   void SetOsd(std::string text, Uint32 duration = 1600);
 
   GbaFrontendOptions options_;
+  int canvas_width_ = 720;
+  int canvas_height_ = 480;
   SDL_Window *window_ = nullptr;
   SDL_Renderer *renderer_ = nullptr;
   bool initialized_ = false;

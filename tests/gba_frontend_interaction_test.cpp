@@ -12,6 +12,46 @@
 #endif
 
 struct GbaFrontendInteractionTest {
+  static void Resolutions() {
+    for (const auto dimensions : {std::pair<int, int>{720, 480}, {640, 480},
+                                  {720, 720}, {800, 600}, {1280, 720}}) {
+      GbaFrontendOptions options;
+      options.width = dimensions.first;
+      options.height = dimensions.second;
+      options.app_dir = ".";
+      options.state_dir = "build/interaction-state";
+      options.screenshot_path = "build/interaction-resolution.png";
+      options.no_video = true;
+      if (const char *font = std::getenv("PEGASUSG_FONT")) options.font_path = font;
+      GbaFrontend app(options);
+      assert(app.Initialize());
+      int output_width = 0, output_height = 0;
+      SDL_GetRendererOutputSize(app.renderer_, &output_width, &output_height);
+      assert(app.canvas_width_ == output_width && app.canvas_height_ == output_height);
+      float scale_x = 0, scale_y = 0;
+      SDL_RenderGetScale(app.renderer_, &scale_x, &scale_y);
+      assert(scale_x == 1.0f && scale_y == 1.0f);
+      app.preferences_ = GbaPreferences{};
+      app.games_.assign(40, GbaGame{});
+      app.visible_.clear();
+      for (int i = 0; i < 40; ++i) app.visible_.push_back(i);
+      for (bool fullscreen : {false, true}) {
+        app.preferences_.fullscreen_grid = fullscreen;
+        app.selected_ = 39;
+        app.EnsureSelectionVisible();
+        const int row = app.selected_ / app.GridColumns();
+        assert(row >= app.scroll_row_ && row < app.scroll_row_ + app.GridVisibleRows());
+        app.RenderGrid(fullscreen ? 1.0f : 0.0f);
+      }
+      app.RenderSidebar();
+      app.RenderSearch();
+      app.RenderExitDialog();
+      SDL_Rect viewport{};
+      SDL_RenderGetViewport(app.renderer_, &viewport);
+      assert(viewport.x == 0 && viewport.y == 0);
+      assert(app.SaveScreenshot(options.screenshot_path));
+    }
+  }
   static void Run() {
     using A = GbaFrontend::Action;
     GbaFrontendOptions options;
@@ -343,5 +383,6 @@ struct GbaFrontendInteractionTest {
 int main() {
   SDL_setenv("SDL_VIDEODRIVER", "dummy", 1);
   GbaFrontendInteractionTest::Run();
+  GbaFrontendInteractionTest::Resolutions();
   std::cout << "frontend interaction tests passed\n";
 }
