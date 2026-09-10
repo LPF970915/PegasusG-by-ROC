@@ -108,6 +108,7 @@ test: build/layout_test.exe build/catalog_test.exe build/online_sources_test.exe
 	sh tests/filter_mode_test.sh
 	sh tests/auto_cheats_test.sh
 	sh tests/autostart_test.sh
+	sh tests/suspend_test.sh
 	sh tests/game_overrides_test.sh
 	sh tests/game_volume_test.sh
 	sh tests/recommended_controls_test.sh

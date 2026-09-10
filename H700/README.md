@@ -105,13 +105,20 @@ services and splash targets to another H700-class machine.
 | Start | Select game core | Apply search |
 
 Quick settings share their values with Settings. L2 also changes the theme
-while this menu is open. Exit offers Return to system, Shut down and Cancel;
-Cancel is selected initially. Favourites display a heart even when cover
+while this menu is open. Exit offers Return to system, Restart, Shut down and Cancel;
+Cancel is selected initially; Shut down is highlighted red when selected. Favourites display a heart even when cover
 titles are hidden. Favourites appear first, earliest added first, and the
 selected game remains selected after adding or removing a favourite. Removing
 one from the Favourites category returns to its native category. Older saved
 favourites without ordering metadata retain their original relative order.
 The full-screen grid does not play preview video.
+
+Lid sleep uses the same launcher-managed process restart as the power button.
+SDL is destroyed before suspension; waking starts a fresh frontend and restores
+the selected game and category, brightness and input devices. Lid sleep sets
+`os_sleep` to 0 to allow hall wake; the power button uses Super Standby (16),
+which requires the power button to wake and consumes less standby power.
+Update `launch.sh` together with the executable for this behavior.
 
 Descriptions scroll automatically and pause while a menu or search is open.
 The right-aligned hints stay within the grid area; A/B hints are omitted first

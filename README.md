@@ -118,7 +118,7 @@ See `docs/PORTING_GUIDE.md` before adapting the launcher to another machine.
 ## Controls and Search
 
 - **B / Menu** opens Settings, Help and Exit over the dimmed main screen.
-  Exit asks whether to return to the system, shut down or cancel.
+  Exit asks whether to return to the system, restart, shut down or cancel.
 - **Y** opens quick settings and a search field; **R2** opens search directly.
 - **X** toggles the full-screen grid and stops video preview in this mode.
 - **L2** cycles theme colours, including while quick settings are open.

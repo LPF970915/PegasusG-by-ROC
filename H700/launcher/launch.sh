@@ -281,12 +281,17 @@ suspend_system() {
     log_line "[launcher] power script missing: $POWER_SCRIPT"
     return 1
   fi
-  if [ "$automatic" -eq 1 ]; then
-    # The vendor menu writes bit 0x10 here during startup. The battery driver
-    # converts it to os_sleep_type=1, which arms hall-open as a wake source.
-    if [ -w "$OS_SLEEP_NODE" ]; then
-      printf 16 >"$OS_SLEEP_NODE"
+  # Super Standby (nonzero) disables hall wake. Lid sleep needs normal standby.
+  sleep_mode=16
+  if [ "$automatic" -eq 1 ]; then sleep_mode=0; fi
+  if [ -e "$OS_SLEEP_NODE" ]; then
+    if ! printf '%s' "$sleep_mode" >"$OS_SLEEP_NODE"; then
+      log_line "[launcher] failed to set sleep mode=$sleep_mode"
+      return 1
     fi
+    log_line "[launcher] sleep mode=$sleep_mode"
+  fi
+  if [ "$automatic" -eq 1 ]; then
     log_line "[launcher] suspending reason=hall"
     "$POWER_SCRIPT" auto >>"$LOG_FILE" 2>&1
   else
@@ -349,11 +354,6 @@ export PEGASUSG_LAUNCH_REQUEST="$REQUEST"
 export PEGASUSG_CONTENT_ROOTS="${PEGASUSG_CONTENT_ROOTS:-/mnt/mmc/Roms/GBA:/mnt/mmc/Roms/GBA hack:/mnt/mmc/Roms/GBA vib:/mnt/sdcard/Roms/GBA:/mnt/sdcard/Roms/GBA hack:/mnt/sdcard/Roms/GBA vib}"
 export PEGASUSG_DIAGNOSTICS="${PEGASUSG_DIAGNOSTICS:-1}"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME"
-
-if [ -w "$OS_SLEEP_NODE" ]; then
-  printf 16 >"$OS_SLEEP_NODE"
-  log_line "[launcher] hall wake mode enabled"
-fi
 
 while :; do
   if [ "$first_frontend" -eq 1 ]; then

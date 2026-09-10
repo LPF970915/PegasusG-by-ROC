@@ -232,16 +232,43 @@ struct GbaFrontendInteractionTest {
     app.Handle(A::Back); app.description_next_at_ = 0;
     app.RenderGameInfo(0); assert(app.description_scroll_line_ == 0);
     app.Handle(A::Down); app.Handle(A::Down); app.Handle(A::Confirm);
-    assert(app.exit_dialog_open_ && app.exit_dialog_selected_ == 2 && app.running_);
+    assert(app.exit_dialog_open_ && app.exit_dialog_selected_ == 3 && app.running_);
     app.Render(); assert(app.SaveScreenshot("build/review-exit-dialog.png"));
     app.Handle(A::Confirm); assert(!app.exit_dialog_open_ && app.running_);
     app.Handle(A::Confirm); app.Handle(A::Back);
     assert(!app.exit_dialog_open_ && app.running_);
-    app.Handle(A::Confirm); app.Handle(A::Up); app.Handle(A::Confirm);
+    app.Handle(A::Confirm); app.Handle(A::Up);
+    app.Render(); assert(app.SaveScreenshot("build/review-exit-shutdown.png"));
+    Uint8 shutdown_pixel[4] = {};
+    const SDL_Rect shutdown_sample{225, 266, 1, 1};
+    assert(SDL_RenderReadPixels(app.renderer_, &shutdown_sample, SDL_PIXELFORMAT_RGBA32,
+                                shutdown_pixel, 4) == 0);
+    assert(shutdown_pixel[0] > 150 && shutdown_pixel[1] < 80 && shutdown_pixel[2] < 80);
+    app.Handle(A::Confirm);
     assert(!app.running_ && app.exit_code_ == 24);
     app.running_ = true;
     app.Handle(A::Confirm); app.Handle(A::Up); app.Handle(A::Up); app.Handle(A::Confirm);
+    assert(!app.running_ && app.exit_code_ == 23);
+    app.running_ = true;
+    app.Handle(A::Confirm); app.Handle(A::Down); app.Handle(A::Confirm);
     assert(!app.running_ && app.exit_code_ == 0);
+    app.running_ = true;
+    app.hall_state_ = -1;
+    app.HandleHallState(-1); app.HandleHallState(0);
+    assert(app.running_);
+    app.HandleHallState(1); app.HandleHallState(1); app.HandleHallState(-1);
+    assert(app.running_ && app.hall_state_ == 1);
+    const std::string before_suspend = app.SelectedGame()->id;
+    app.HandleHallState(0);
+    assert(!app.running_ && app.exit_code_ == 22);
+    app.SaveUiState();
+    GbaUiState saved;
+    assert(app.ui_state_.Load(&saved) && saved.selected_game_id == before_suspend);
+    assert(saved.active_tab == app.active_tab_ && saved.scroll_row == app.scroll_row_);
+    app.running_ = true; app.HandleHallState(1);
+    assert(app.running_);
+    app.Handle(A::Power); assert(!app.running_ && app.exit_code_ == 21);
+    app.running_ = true;
 #ifndef _WIN32
     // Exercise the actual H700 evdev path using recorded button codes.
     app.sidebar_open_ = false;

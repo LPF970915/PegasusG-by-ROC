@@ -1057,12 +1057,13 @@ void GbaFrontend::Handle(Action action) {
     if (action == Action::Back || action == Action::Menu || action == Action::QuickMenu) {
       exit_dialog_open_ = false;
     } else if (action == Action::Up || action == Action::Down) {
-      exit_dialog_selected_ = (exit_dialog_selected_ + 3 + (action == Action::Up ? -1 : 1)) % 3;
+      exit_dialog_selected_ = (exit_dialog_selected_ + 4 + (action == Action::Up ? -1 : 1)) % 4;
     } else if (action == Action::Confirm) {
       exit_dialog_open_ = false;
-      if (exit_dialog_selected_ != 2) {
-        if (exit_dialog_selected_ == 1) video_.Stop();
-        exit_code_ = exit_dialog_selected_ == 1 ? kExitPowerOffSystem : 0;
+      if (exit_dialog_selected_ != 3) {
+        video_.Stop();
+        const int codes[] = {0, kExitRestartSystem, kExitPowerOffSystem};
+        exit_code_ = codes[exit_dialog_selected_];
         running_ = false;
       }
     }
@@ -1097,7 +1098,7 @@ void GbaFrontend::Handle(Action action) {
       } else if (sidebar_selected_ == 1) help_open_ = true;
       else {
         exit_dialog_open_ = true;
-        exit_dialog_selected_ = 2;
+        exit_dialog_selected_ = 3;
         held_grid_action_ = Action::None;
       }
     }
@@ -1641,38 +1642,17 @@ void GbaFrontend::PollHall() {
   const Uint32 now = SDL_GetTicks();
   if (now < next_hall_poll_) return;
   next_hall_poll_ = now + 250;
-  const int current = services_.HallState();
-  if (hall_state_ == 1 && current == 0) {
-    if (!SuspendInPlace(true)) {
-      exit_code_ = kExitSuspendAutomatic;
-      running_ = false;
-    }
-    return;
-  }
-  if (current >= 0) hall_state_ = current;
+  HandleHallState(services_.HallState());
 }
 
-bool GbaFrontend::SuspendInPlace(bool automatic) {
-  osd_text_.clear();
-  osd_until_ = 0;
-  volume_hint_until_ = 0;
-  SaveUiState();
-  if (options_.diagnostics) std::cerr << "[gba] suspending in place reason=hall\n";
-  DestroyRuntime();
-  const bool suspended = services_.Suspend(automatic);
-  if (!InitializeRuntime()) {
-    std::cerr << "[gba] runtime reinitialization failed after resume\n";
-    return false;
+void GbaFrontend::HandleHallState(int current) {
+  if (hall_state_ == 1 && current == 0) {
+    // Let the launcher suspend after SDL exits and recreate it on wake.
+    video_.Stop();
+    exit_code_ = kExitSuspendAutomatic;
+    running_ = false;
   }
-  next_status_poll_ = 0;
-  next_hall_poll_ = SDL_GetTicks() + 500;
-  PollStatus();
-  hall_state_ = services_.HallState();
-  SelectionChanged();
-  if (options_.diagnostics) {
-    std::cerr << "[gba] resumed in place suspend_rc=" << (suspended ? 0 : 1) << '\n';
-  }
-  return suspended;
+  if (current >= 0) hall_state_ = current;
 }
 
 void GbaFrontend::RestoreUiState() {
@@ -2405,15 +2385,17 @@ void GbaFrontend::RenderHints() {
 
 void GbaFrontend::RenderExitDialog() {
   Fill(renderer_, SDL_Rect{0, 0, 720, 480}, SDL_Color{0, 0, 0, 135});
-  Fill(renderer_, SDL_Rect{205, 115, 310, 250}, SDL_Color{66, 69, 76, 255});
-  DrawText("退出", 360, 133, 22, kInk, 270, true);
-  const char *labels[] = {"返回系统", "关机", "取消"};
-  for (int i = 0; i < 3; ++i) {
-    const SDL_Rect row{220, 177 + i * 57, 280, 48};
+  Fill(renderer_, SDL_Rect{205, 85, 310, 310}, SDL_Color{66, 69, 76, 255});
+  DrawText("退出", 360, 103, 22, kInk, 270, true);
+  const char *labels[] = {"返回系统", "重启", "关机", "取消"};
+  for (int i = 0; i < 4; ++i) {
+    const SDL_Rect row{220, 147 + i * 57, 280, 48};
     const bool selected = exit_dialog_selected_ == i;
-    Fill(renderer_, row, selected ? SDL_Color{222, 225, 233, 255} : SDL_Color{82, 85, 94, 255});
+    Fill(renderer_, row, selected
+        ? (i == 2 ? SDL_Color{190, 45, 55, 255} : SDL_Color{222, 225, 233, 255})
+        : SDL_Color{82, 85, 94, 255});
     DrawText(labels[i], 360, row.y + 12, 19,
-             selected ? SDL_Color{24, 26, 30, 255} : kInk, 250, true);
+             selected && i != 2 ? SDL_Color{24, 26, 30, 255} : kInk, 250, true);
   }
 }
 

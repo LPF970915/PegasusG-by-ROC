@@ -74,7 +74,7 @@ class GbaFrontend {
   Action Translate(const SDL_Event &event);
   bool InitializeRuntime();
   void DestroyRuntime();
-  bool SuspendInPlace(bool automatic);
+  void HandleHallState(int current);
   void OpenEvdevInput();
   void PollEvdevInput();
   void BeginRepeat(Action action);
@@ -173,7 +173,7 @@ class GbaFrontend {
   bool settings_open_ = false;
   bool sidebar_open_ = false;
   bool exit_dialog_open_ = false;
-  int exit_dialog_selected_ = 2;
+  int exit_dialog_selected_ = 3;
   bool quick_menu_open_ = false;
   bool help_open_ = false;
   int sidebar_selected_ = 0;
