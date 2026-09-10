@@ -283,7 +283,7 @@ suspend_system() {
   fi
   # Super Standby (nonzero) disables hall wake. Lid sleep needs normal standby.
   sleep_mode=16
-  if [ "$automatic" -eq 1 ]; then sleep_mode=0; fi
+  if [ "$automatic" -eq 1 ]; then sleep_mode="${2:-0}"; fi
   if [ -e "$OS_SLEEP_NODE" ]; then
     if ! printf '%s' "$sleep_mode" >"$OS_SLEEP_NODE"; then
       log_line "[launcher] failed to set sleep mode=$sleep_mode"
@@ -380,8 +380,10 @@ while :; do
     reuse_bgm=1
     continue
   fi
-  if [ "$rc" -eq 22 ]; then
-    suspend_system 1 || true
+  if [ "$rc" -eq 22 ] || [ "$rc" -eq 25 ]; then
+    if [ "$rc" -eq 25 ]; then suspend_system 1 16 || true
+    else suspend_system 1 || true
+    fi
     reuse_bgm=1
     continue
   fi

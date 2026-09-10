@@ -267,6 +267,22 @@ struct GbaFrontendInteractionTest {
     assert(saved.active_tab == app.active_tab_ && saved.scroll_row == app.scroll_row_);
     app.running_ = true; app.HandleHallState(1);
     assert(app.running_);
+    app.AdjustSetting(14, A::Right);
+    assert(app.preferences_.super_standby);
+    GbaPreferences standby_saved;
+    assert(app.preferences_store_.Load(&standby_saved) && standby_saved.super_standby);
+    app.HandleHallState(0);
+    assert(!app.running_ && app.exit_code_ == 25);
+    app.running_ = true;
+    app.settings_open_ = true; app.settings_selected_ = 14; app.EnsureSettingsVisible();
+    app.Render(); assert(app.SaveScreenshot("build/review-super-standby.png"));
+    app.AdjustSetting(14, A::Left);
+    assert(!app.preferences_.super_standby);
+    app.Render(); assert(app.SaveScreenshot("build/review-default-standby.png"));
+    app.settings_open_ = false;
+    app.HandleHallState(1); app.HandleHallState(0);
+    assert(!app.running_ && app.exit_code_ == 22);
+    app.running_ = true;
     app.Handle(A::Power); assert(!app.running_ && app.exit_code_ == 21);
     app.running_ = true;
 #ifndef _WIN32

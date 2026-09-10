@@ -27,6 +27,11 @@ test "$(tail -n 1 "$POWER_CALLS")" = power:16
 suspend_system 1
 test "$(tail -n 1 "$POWER_CALLS")" = auto:0
 
+suspend_system 1 16
+test "$(tail -n 1 "$POWER_CALLS")" = auto:16
+suspend_system 1
+test "$(tail -n 1 "$POWER_CALLS")" = auto:0
+
 export POWER_RESULT=7
 if suspend_system 1; then exit 1; else test "$?" -eq 7; fi
 unset POWER_RESULT

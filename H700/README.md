@@ -115,8 +115,9 @@ The full-screen grid does not play preview video.
 
 Lid sleep uses the same launcher-managed process restart as the power button.
 SDL is destroyed before suspension; waking starts a fresh frontend and restores
-the selected game and category, brightness and input devices. Lid sleep sets
-`os_sleep` to 0 to allow hall wake; the power button uses Super Standby (16),
+the selected game and category, brightness and input devices. Settings includes a Standby Mode option. Default Standby (the default) sets
+`os_sleep` to 0 for lid sleep, allowing hall wake. Super Standby uses 16 and
+requires the power button to wake. The power button also uses Super Standby (16),
 which requires the power button to wake and consumes less standby power.
 Update `launch.sh` together with the executable for this behavior.
 

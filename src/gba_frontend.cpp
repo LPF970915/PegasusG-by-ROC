@@ -35,6 +35,7 @@ constexpr int kExitSuspendManual = 21;
 constexpr int kExitSuspendAutomatic = 22;
 constexpr int kExitRestartSystem = 23;
 constexpr int kExitPowerOffSystem = 24;
+constexpr int kExitSuspendAutomaticDeep = 25;
 constexpr size_t kImageCacheCapacity = 64;
 constexpr int kTabRecent = 0;
 constexpr int kTabGba = 1;
@@ -55,8 +56,8 @@ constexpr float kCoverTitleMarqueeSpeed = 28.0f;
 constexpr int kCoverTitleMarqueeGap = 24;
 constexpr std::size_t kMaximumRecentGames = 100;
 constexpr int kVersionMenuVisibleRows = 6;
-constexpr int kSettingsCount = 16;
-constexpr int kQuickSettings[] = {-1, 3, 4, 5, 8, 9, 10, 11, 12, 13, 16, 6};
+constexpr int kSettingsCount = 17;
+constexpr int kQuickSettings[] = {-1, 3, 4, 5, 8, 9, 10, 11, 12, 13, 17, 6};
 constexpr int kQuickSettingsCount = sizeof(kQuickSettings) / sizeof(kQuickSettings[0]);
 constexpr int kGridX = 240;
 constexpr int kGridY = 45;
@@ -1649,7 +1650,7 @@ void GbaFrontend::HandleHallState(int current) {
   if (hall_state_ == 1 && current == 0) {
     // Let the launcher suspend after SDL exits and recreate it on wake.
     video_.Stop();
-    exit_code_ = kExitSuspendAutomatic;
+    exit_code_ = preferences_.super_standby ? kExitSuspendAutomaticDeep : kExitSuspendAutomatic;
     running_ = false;
   }
   if (current >= 0) hall_state_ = current;
@@ -2059,7 +2060,7 @@ void GbaFrontend::RenderSettings() {
   };
   const std::string labels[kSettingsCount] = {
       "返回官方系统", "开机自动进入", "使用天马启动页", "屏幕亮度", "前端音量", "系统音量", "GBA游戏滤镜",
-      "使用推荐按键配置", "背景音乐", "预览视频", "封面大小", "主题颜色", "封面标题字号", "介绍文字字号", "重启", "关机",
+      "使用推荐按键配置", "背景音乐", "预览视频", "封面大小", "主题颜色", "封面标题字号", "介绍文字字号", "待机模式", "重启", "关机",
   };
   const std::string values[kSettingsCount] = {
       "", status_.autostart ? "< 开启 >" : "< 关闭 >",
@@ -2075,6 +2076,7 @@ void GbaFrontend::RenderSettings() {
       "< " + theme_values[static_cast<int>(preferences_.theme_color)] + " >",
       "< " + std::to_string(CoverTitleFontSize()) + " >",
       "< " + std::to_string(DescriptionFontSize()) + " >",
+      preferences_.super_standby ? "< 超长待机 >" : "< 默认待机 >",
       "", "",
   };
 
@@ -2326,16 +2328,19 @@ void GbaFrontend::AdjustSetting(int index, Action action) {
     const int direction = action == Action::Left ? -1 : 1;
     preferences_.system_volume = (preferences_.system_volume + 10 + direction) % 10;
     SavePreferences();
-  } else if (index == 14 && action == Action::Confirm) {
+  } else if (index == 14 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    preferences_.super_standby = !preferences_.super_standby;
+    SavePreferences();
+  } else if (index == 15 && action == Action::Confirm) {
     video_.Stop();
     exit_code_ = kExitRestartSystem;
     running_ = false;
-  } else if (index == 15 && action == Action::Confirm) {
+  } else if (index == 16 && action == Action::Confirm) {
     video_.Stop();
     exit_code_ = kExitPowerOffSystem;
     running_ = false;
   }
-  if (index == 16 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+  if (index == 17 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
     preferences_.show_cover_titles = !preferences_.show_cover_titles;
     SavePreferences();
   }

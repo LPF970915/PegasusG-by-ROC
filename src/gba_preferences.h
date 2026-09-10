@@ -49,6 +49,7 @@ struct GbaPreferences {
   bool show_cover_titles = true;
   bool fullscreen_grid = false;
   int system_volume = 0;
+  bool super_standby = false;
 };
 
 class GbaPreferencesStore {

@@ -128,6 +128,8 @@ See `docs/PORTING_GUIDE.md` before adapting the launcher to another machine.
 - Search accepts Chinese, full pinyin and initials, with an offline controller
   keyboard. **L1** changes case, **X** deletes (hold to repeat), **B** cancels,
   **Y** inserts a space, **Select** clears and **Start** applies the query.
+- Settings includes Default Standby (lid-open wake, the default) and Super
+  Standby (power-button wake). Update the launcher with the executable.
 - Frontend Volume controls the frontend. System Volume defaults to Sync,
   inheriting the frontend volume at game startup, or can use a fixed level
   from 1 to 9. Both settings are available in quick settings.
