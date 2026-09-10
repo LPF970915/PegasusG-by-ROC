@@ -4,6 +4,7 @@ set -eu
 ROOT="${TMPDIR:-/tmp}/pegasusg-game-volume-test-$$"
 STATE="$ROOT/state"
 RA_VOLUME="$ROOT/retroarch_volume.cfg"
+VENDOR_VOLUME="$ROOT/openbor_volume"
 SCRIPT="H700/launcher/game_volume.sh"
 
 cleanup() {
@@ -13,7 +14,7 @@ trap cleanup EXIT INT TERM
 mkdir -p "$STATE"
 
 run_volume() {
-  PEGASUSG_STATE_DIR="$STATE" PEGASUSG_RA_VOLUME_CFG="$RA_VOLUME" sh "$SCRIPT" "$@"
+  PEGASUSG_STATE_DIR="$STATE" PEGASUSG_RA_VOLUME_CFG="$RA_VOLUME" PEGASUSG_VENDOR_VOLUME_NODE="$VENDOR_VOLUME" sh "$SCRIPT" "$@"
 }
 
 printf '2\n' >"$STATE/volume.level"
@@ -69,3 +70,21 @@ grep -q '^audio_volume = "-15.8"$' "$RA_VOLUME"
 : >"$STATE/volume.level"
 run_volume prepare 0
 grep -q '^audio_volume = "-3.8"$' "$RA_VOLUME"
+
+# Vendor RetroArch ignores the config volume at startup and reads openbor_volume.
+printf '10\n' >"$VENDOR_VOLUME"
+for entry in '0 0 -80.0' '1 1 -45.0' '2 2 -35.0' '3 3 -30.0' '4 4 -25.0' '5 5 -20.0' '6 6 -15.0' '7 7 -10.0' '8 8 -6.0' '9 10 0.0'; do
+  set -- $entry
+  printf '%s\n' "$1" >"$STATE/volume.level"
+  run_volume prepare 0
+  [ "$(cat "$VENDOR_VOLUME")" = "$2" ]
+  grep -q "^audio_volume = \"$3\"$" "$RA_VOLUME"
+done
+printf '9\n' >"$STATE/volume.level"
+run_volume prepare 1
+[ "$(cat "$VENDOR_VOLUME")" = 1 ]
+grep -q '^audio_volume = "-45.0"$' "$RA_VOLUME"
+run_volume prepare 9
+[ "$(cat "$VENDOR_VOLUME")" = 10 ]
+run_volume prepare -1
+[ "$(cat "$VENDOR_VOLUME")" = 10 ]

@@ -4,6 +4,7 @@ set -eu
 ACTION="${1:-}"
 STATE_DIR="${PEGASUSG_STATE_DIR:-/mnt/data/pegasusg-by-roc}"
 RA_VOLUME_CFG="${PEGASUSG_RA_VOLUME_CFG:-/.config/retroarch/retroarch_volume.cfg}"
+VENDOR_VOLUME_NODE="${PEGASUSG_VENDOR_VOLUME_NODE:-/sys/class/power_supply/axp2202-battery/openbor_volume}"
 GAME_VOLUME_DB="$STATE_DIR/game-volume.db"
 SCHEMA_FILE="$STATE_DIR/game-volume.schema"
 LEGACY_MARKER="$STATE_DIR/game-volume-independent"
@@ -84,7 +85,19 @@ prepare_volume() {
     *) level="" ;;
   esac
   if [ -n "$level" ]; then
-    write_ra_db "$(frontend_attenuation "$level")"
+    if [ -e "$VENDOR_VOLUME_NODE" ]; then
+      # Vendor RetroArch reads this level after loading audio_volume from its config.
+      case "$level" in
+        0) db=-80.0 ;; 1) db=-45.0 ;; 2) db=-35.0 ;; 3) db=-30.0 ;;
+        4) db=-25.0 ;; 5) db=-20.0 ;; 6) db=-15.0 ;; 7) db=-10.0 ;;
+        8) db=-6.0 ;; 9) db=0.0 ;;
+      esac
+      write_ra_db "$db"
+      [ "$level" -ne 9 ] || level=10
+      printf '%s\n' "$level" >"$VENDOR_VOLUME_NODE"
+    else
+      write_ra_db "$(frontend_attenuation "$level")"
+    fi
     return
   fi
   schema="$(cat "$SCHEMA_FILE" 2>/dev/null || true)"
