@@ -169,15 +169,37 @@ struct GbaFrontendInteractionTest {
     app.next_backspace_at_ = 0; app.PollHeldActions();
     assert(app.search_draft_ == "unchanged");
     app.search_draft_ = "another long name";
-    app.keyboard_row_ = 4; app.keyboard_column_ = 4;
+    app.keyboard_row_ = 4; app.keyboard_column_ = 8;
     app.Handle(A::Confirm); assert(app.search_open_ && app.search_draft_.empty());
     app.Handle(A::Confirm); assert(app.search_open_);
+    // Vertical navigation keeps the same column, including the two-column action keys.
+    for (int column = 0; column < 12; ++column) {
+      app.keyboard_row_ = 0; app.keyboard_column_ = column;
+      for (int row = 1; row <= 4; ++row) {
+        app.Handle(A::Down);
+        assert(app.keyboard_row_ == row && app.keyboard_column_ == column);
+      }
+      for (int row = 3; row >= 0; --row) {
+        app.Handle(A::Up);
+        assert(app.keyboard_row_ == row && app.keyboard_column_ == column);
+      }
+    }
+    app.keyboard_row_ = 1; app.keyboard_column_ = 0;
+    app.Handle(A::Left); assert(app.keyboard_column_ == 11);
+    app.Handle(A::Right); assert(app.keyboard_column_ == 0);
+    app.search_draft_.clear(); app.keyboard_column_ = 3;
+    app.Handle(A::Confirm); app.Handle(A::Down); app.Handle(A::Confirm);
+    app.Handle(A::Down); app.Handle(A::Confirm);
+    assert(app.search_draft_ == "RFV");
+    app.Handle(A::Down); app.Handle(A::Right);
+    assert(app.keyboard_column_ == 5);
+    app.Handle(A::Up); assert(app.keyboard_row_ == 3 && app.keyboard_column_ == 5);
     app.keyboard_row_ = app.keyboard_column_ = 0;
     app.search_draft_ = "kdyg";
     app.Render(); assert(app.SaveScreenshot("build/review-search.png"));
     assert(app.icons_texture_ != nullptr);
     SDL_Texture *atlas = app.icons_texture_;
-    app.keyboard_row_ = 4; app.keyboard_column_ = 5;
+    app.keyboard_row_ = 4; app.keyboard_column_ = 10;
     app.Render(); assert(app.icons_texture_ == atlas);
     assert(app.SaveScreenshot("build/review-search-selected.png"));
     event.type = SDL_CONTROLLERBUTTONDOWN;
@@ -193,7 +215,7 @@ struct GbaFrontendInteractionTest {
     app.OpenSearch(); app.search_draft_.clear(); app.Handle(A::ToggleChrome);
     assert(app.search_open_);
     app.search_draft_ = "cancel with keyboard";
-    app.keyboard_row_ = 4; app.keyboard_column_ = 3; app.Handle(A::Confirm);
+    app.keyboard_row_ = 4; app.keyboard_column_ = 6; app.Handle(A::Confirm);
     assert(!app.search_open_ && app.search_query_ == "kdyg");
     assert(app.search_query_ == "kdyg");
     app.OpenSearch(); app.search_draft_ = "no match"; app.Handle(A::SearchDone);
@@ -202,7 +224,7 @@ struct GbaFrontendInteractionTest {
     // The action row can be reached and activated entirely with D-pad + A.
     app.Handle(A::Down); app.Handle(A::Down); app.Handle(A::Down);
     assert(app.keyboard_row_ == 4);
-    app.Handle(A::Left); assert(app.keyboard_column_ == 5);
+    app.Handle(A::Left); assert(app.keyboard_column_ == 10);
     app.Handle(A::Confirm);
     assert(app.search_query_.empty() && app.visible_.size() == 24);
     const auto theme = app.preferences_.theme_color;

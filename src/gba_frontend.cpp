@@ -2173,8 +2173,9 @@ void GbaFrontend::RenderVersionMenu() {
 }
 
 namespace {
-constexpr const char *kKeyboardRows[] = {
-    "1234567890[]", "qwertyuiop", "asdfghjkl-", "zxcvbnm.:/_"};
+constexpr int kKeyboardColumns = 12;
+constexpr const char kKeyboardRows[][kKeyboardColumns + 1] = {
+    "1234567890[]", "qwertyuiop-_", "asdfghjkl:/'", "zxcvbnm.,!?+"};
 }
 
 void GbaFrontend::OpenSearch() {
@@ -2216,16 +2217,14 @@ void GbaFrontend::HandleSearch(Action action) {
   } else if (action == Action::TabPrevious) keyboard_upper_ = !keyboard_upper_;
   else if (action == Action::QuickMenu && search_draft_.size() < 240) search_draft_ += ' ';
   else if (action == Action::Up || action == Action::Down) {
-    const int previous_count = keyboard_row_ == 4 ? 6 : static_cast<int>(std::string(kKeyboardRows[keyboard_row_]).size());
     keyboard_row_ = std::clamp(keyboard_row_ + (action == Action::Up ? -1 : 1), 0, 4);
-    const int count = keyboard_row_ == 4 ? 6 : static_cast<int>(std::string(kKeyboardRows[keyboard_row_]).size());
-    keyboard_column_ = std::min(keyboard_column_ * count / previous_count, count - 1);
   } else if (action == Action::Left || action == Action::Right) {
-    const int count = keyboard_row_ == 4 ? 6 : static_cast<int>(std::string(kKeyboardRows[keyboard_row_]).size());
-    keyboard_column_ = (keyboard_column_ + count + (action == Action::Left ? -1 : 1)) % count;
+    const int step = keyboard_row_ == 4 ? 2 : 1;
+    keyboard_column_ = (keyboard_column_ + kKeyboardColumns +
+        (action == Action::Left ? -step : step)) % kKeyboardColumns;
   } else if (action == Action::Confirm && keyboard_row_ == 4) {
     const Action operations[] = {Action::TabPrevious, Action::QuickMenu, Action::ToggleChrome, Action::Back, Action::Favorite, Action::SearchDone};
-    HandleSearch(operations[keyboard_column_]);
+    HandleSearch(operations[keyboard_column_ / 2]);
   } else if (action == Action::Confirm && search_draft_.size() < 240) {
     char ch = kKeyboardRows[keyboard_row_][keyboard_column_];
     search_draft_ += keyboard_upper_ ? static_cast<char>(std::toupper(static_cast<unsigned char>(ch))) : ch;
@@ -2481,10 +2480,9 @@ void GbaFrontend::RenderSearch() {
   DrawText(shown, 93, 150, 18, kInk, 530);
   for (int row = 0; row < 4; ++row) {
     const std::string keys = kKeyboardRows[row];
-    const int start = (720 - static_cast<int>(keys.size()) * 44) / 2;
-    for (int col = 0; col < static_cast<int>(keys.size()); ++col) {
+    for (int col = 0; col < kKeyboardColumns; ++col) {
       const bool selected = row == keyboard_row_ && col == keyboard_column_;
-      const SDL_Rect box{start + col * 44, 193 + row * 40, 39, 33};
+      const SDL_Rect box{84 + col * 46, 193 + row * 40, 41, 33};
       Fill(renderer_, box, selected ? SDL_Color{222, 225, 233, 255} : SDL_Color{82, 85, 94, 255});
       char ch = keys[col];
       if (keyboard_upper_) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
@@ -2496,8 +2494,8 @@ void GbaFrontend::RenderSearch() {
   const char *buttons[] = {"L1", "Y", "X", "B", "SELECT", "START"};
   const int icons[] = {0, 1, 2, 3, 5, 4};
   for (int col = 0; col < 6; ++col) {
-    const SDL_Rect box{84 + col * 93, 361, 87, 39};
-    const bool selected = keyboard_row_ == 4 && keyboard_column_ == col;
+    const SDL_Rect box{84 + col * 92, 361, 87, 39};
+    const bool selected = keyboard_row_ == 4 && keyboard_column_ / 2 == col;
     const SDL_Color ink = selected ? SDL_Color{24, 26, 30, 255} : kInk;
     Fill(renderer_, box, selected ? SDL_Color{222, 225, 233, 255} : SDL_Color{82, 85, 94, 255});
     DrawText(buttons[col], box.x + 6, box.y + 3, col < 3 ? 11 : 9, ink);

@@ -125,6 +125,8 @@ Descriptions scroll automatically and pause while a menu or search is open.
 The right-aligned hints stay within the grid area; A/B hints are omitted first
 when space is limited. Active search text has its own background.
 
+Search uses a fixed 12-column keyboard grid. Up/down keeps the same column,
+including when returning from the two-column action keys.
 Search filters the current category and remains active across category changes.
 `口袋妖怪`, `kou dai yao guai` and `kdyg` all match 口袋妖怪. Use `v` for ü.
 The bundled table uses each character's first reading, not a phrase dictionary.
