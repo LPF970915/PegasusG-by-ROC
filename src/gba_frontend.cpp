@@ -23,6 +23,8 @@
 
 #include "pegasus_metadata.h"
 #include "optimized_image_path.h"
+#include "game_search.h"
+#include "ui_icons_bitmap.h"
 
 namespace fs = std::filesystem;
 
@@ -33,6 +35,7 @@ constexpr int kExitSuspendManual = 21;
 constexpr int kExitSuspendAutomatic = 22;
 constexpr int kExitRestartSystem = 23;
 constexpr int kExitPowerOffSystem = 24;
+constexpr int kExitSuspendAutomaticDeep = 25;
 constexpr size_t kImageCacheCapacity = 64;
 constexpr int kTabRecent = 0;
 constexpr int kTabGba = 1;
@@ -53,11 +56,11 @@ constexpr float kCoverTitleMarqueeSpeed = 28.0f;
 constexpr int kCoverTitleMarqueeGap = 24;
 constexpr std::size_t kMaximumRecentGames = 100;
 constexpr int kVersionMenuVisibleRows = 6;
-constexpr int kSettingsCount = 15;
+constexpr int kSettingsCount = 17;
+constexpr int kQuickSettings[] = {-1, 3, 4, 5, 8, 9, 10, 11, 12, 13, 17, 6};
+constexpr int kQuickSettingsCount = sizeof(kQuickSettings) / sizeof(kQuickSettings[0]);
 constexpr int kGridX = 240;
 constexpr int kGridY = 45;
-constexpr int kGridWidth = 480;
-constexpr int kGridHeight = 435;
 constexpr int kGridInset = 16;
 constexpr int kFullscreenGridInset = 18;
 constexpr int kCoverTitleBaseFontSize = 12;
@@ -257,6 +260,7 @@ GbaFrontend::~GbaFrontend() {
 
 void GbaFrontend::DestroyRuntime() {
   video_.ReleaseDevices();
+  if (icons_texture_) { SDL_DestroyTexture(icons_texture_); icons_texture_ = nullptr; }
 #ifndef _WIN32
   for (int fd : evdev_input_fds_) close(fd);
 #endif
@@ -329,6 +333,13 @@ bool GbaFrontend::InitializeRuntime() {
     return false;
   }
   initialized_ = true;
+  if (options_.use_mini_assets && options_.screenshot_path.empty()) {
+    SDL_DisplayMode mode{};
+    if (SDL_GetCurrentDisplayMode(0, &mode) == 0 && mode.w > 0 && mode.h > 0) {
+      options_.width = mode.w;
+      options_.height = mode.h;
+    }
+  }
   const Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI |
                        (options_.screenshot_path.empty() ? SDL_WINDOW_SHOWN : SDL_WINDOW_HIDDEN);
   window_ = SDL_CreateWindow("PegasusG by ROC", SDL_WINDOWPOS_CENTERED,
@@ -345,7 +356,11 @@ bool GbaFrontend::InitializeRuntime() {
     return false;
   }
   SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-  SDL_RenderSetLogicalSize(renderer_, 720, 480);
+  int output_width = options_.width, output_height = options_.height;
+  SDL_GetRendererOutputSize(renderer_, &output_width, &output_height);
+  canvas_width_ = output_width;
+  canvas_height_ = output_height;
+  SDL_RenderSetLogicalSize(renderer_, canvas_width_, canvas_height_);
 
   if (options_.font_path.empty()) {
     options_.font_path = FirstExisting({
@@ -389,6 +404,8 @@ bool GbaFrontend::Initialize() {
   scan_report_ = ScanPegasusGbaRoots(options_.content_roots, options_.mod_overrides_path);
   const auto scan_finished = std::chrono::steady_clock::now();
   games_ = std::move(scan_report_.games);
+  search_keys_.reserve(games_.size());
+  for (const auto &game : games_) search_keys_.push_back(game_search::Key(game.title));
   state_.Load(&games_);
   if (state_.LimitRecent(&games_, kMaximumRecentGames)) state_.Save(games_);
   preferences_store_.Load(&preferences_);
@@ -483,6 +500,29 @@ int GbaFrontend::Run() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_QUIT) running_ = false;
+      if (search_open_ && event.type == SDL_TEXTINPUT) {
+        if (search_draft_.size() + std::string(event.text.text).size() <= 240)
+          search_draft_ += event.text.text;
+        search_composition_.clear();
+        continue;
+      }
+      if (search_open_ && event.type == SDL_TEXTEDITING) {
+        search_composition_ = event.edit.text;
+        continue;
+      }
+      if (search_open_ && event.type == SDL_KEYDOWN) {
+        if (event.key.keysym.sym == SDLK_RETURN && search_composition_.empty()) Handle(Action::SearchDone);
+        else if (event.key.keysym.sym == SDLK_ESCAPE) {
+          search_open_ = false; SDL_StopTextInput();
+        } else if (event.key.keysym.sym == SDLK_BACKSPACE && search_composition_.empty() && !event.key.repeat) {
+          BeginRepeat(Action::ToggleChrome); Handle(Action::ToggleChrome);
+        }
+        else if (event.key.keysym.sym == SDLK_UP || event.key.keysym.sym == SDLK_DOWN ||
+                 event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT) {
+          if (search_composition_.empty()) Handle(Translate(event));
+        }
+        continue;  // text entry must never trigger gameplay shortcuts
+      }
       const Action action = Translate(event);
       if (action != Action::None) Handle(action);
       if (!running_) break;
@@ -505,12 +545,20 @@ int GbaFrontend::Run() {
       Action action = Action::None;
       if (options_.screenshot_action == "settings-top") {
         Handle(Action::Menu);
+        Handle(Action::Confirm);
       } else if (options_.screenshot_action == "settings-filter") {
         Handle(Action::Menu);
-        for (int index = 0; index < 5; ++index) Handle(Action::Down);
+        Handle(Action::Confirm);
+        for (int index = 0; index < 6; ++index) Handle(Action::Down);
       } else if (options_.screenshot_action == "settings-bottom") {
         Handle(Action::Menu);
+        Handle(Action::Confirm);
         for (int index = 0; index < kSettingsCount - 1; ++index) Handle(Action::Down);
+      } else if (options_.screenshot_action == "system-menu") action = Action::Back;
+      else if (options_.screenshot_action == "quick-menu") action = Action::QuickMenu;
+      else if (options_.screenshot_action == "search") OpenSearch();
+      else if (options_.screenshot_action == "help") {
+        Handle(Action::Back); Handle(Action::Down); Handle(Action::Confirm);
       } else if (options_.screenshot_action == "right") action = Action::Right;
       else if (options_.screenshot_action == "left") action = Action::Left;
       else if (options_.screenshot_action == "confirm") action = Action::Confirm;
@@ -697,6 +745,7 @@ int GbaFrontend::Run() {
 GbaFrontend::Action GbaFrontend::Translate(const SDL_Event &event) {
   if (event.type == SDL_KEYUP) {
     switch (event.key.keysym.sym) {
+      case SDLK_BACKSPACE: EndRepeat(Action::ToggleChrome); break;
       case SDLK_m: return Action::MenuRelease;
       case SDLK_UP: EndRepeat(Action::Up); break;
       case SDLK_DOWN: EndRepeat(Action::Down); break;
@@ -716,13 +765,13 @@ GbaFrontend::Action GbaFrontend::Translate(const SDL_Event &event) {
       case SDLK_RIGHT: BeginRepeat(Action::Right); return Action::Right;
       case SDLK_RETURN: case SDLK_SPACE: return Action::Confirm;
       case SDLK_ESCAPE: case SDLK_BACKSPACE: return Action::Back;
-      case SDLK_x: return Action::ToggleTitles;
-      case SDLK_y: return Action::ToggleChrome;
+      case SDLK_x: return Action::ToggleChrome;
+      case SDLK_y: return Action::QuickMenu;
       case SDLK_s: return Action::Favorite;
       case SDLK_q: case SDLK_LEFTBRACKET: return Action::TabPrevious;
       case SDLK_e: case SDLK_RIGHTBRACKET: return Action::TabNext;
-      case SDLK_PAGEUP: BeginRepeat(Action::DescriptionUp); return Action::DescriptionUp;
-      case SDLK_PAGEDOWN: BeginRepeat(Action::DescriptionDown); return Action::DescriptionDown;
+      case SDLK_PAGEUP: return Action::QuickTheme;
+      case SDLK_PAGEDOWN: return Action::Search;
       case SDLK_c: return Action::CoreMenu;
       case SDLK_m: return Action::MenuPress;
       case SDLK_VOLUMEDOWN: return Action::VolumeDown;
@@ -749,23 +798,22 @@ GbaFrontend::Action GbaFrontend::Translate(const SDL_Event &event) {
     switch (event.cbutton.button) {
       case SDL_CONTROLLER_BUTTON_A: return Action::Confirm;
       case SDL_CONTROLLER_BUTTON_B: return Action::Back;
-      case SDL_CONTROLLER_BUTTON_X: return Action::ToggleTitles;
-      case SDL_CONTROLLER_BUTTON_Y: return Action::ToggleChrome;
+      case SDL_CONTROLLER_BUTTON_X: BeginRepeat(Action::ToggleChrome); return Action::ToggleChrome;
+      case SDL_CONTROLLER_BUTTON_Y: return Action::QuickMenu;
       case SDL_CONTROLLER_BUTTON_DPAD_UP: BeginRepeat(Action::Up); return Action::Up;
       case SDL_CONTROLLER_BUTTON_DPAD_DOWN: BeginRepeat(Action::Down); return Action::Down;
       case SDL_CONTROLLER_BUTTON_DPAD_LEFT: BeginRepeat(Action::Left); return Action::Left;
       case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: BeginRepeat(Action::Right); return Action::Right;
       case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return Action::TabPrevious;
       case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return Action::TabNext;
-      case SDL_CONTROLLER_BUTTON_BACK:
-        BeginRepeat(Action::DescriptionUp); return Action::DescriptionUp;
-      case SDL_CONTROLLER_BUTTON_START:
-        BeginRepeat(Action::DescriptionDown); return Action::DescriptionDown;
+      case SDL_CONTROLLER_BUTTON_BACK: return Action::Favorite;
+      case SDL_CONTROLLER_BUTTON_START: return search_open_ ? Action::SearchDone : Action::CoreMenu;
       default: break;
     }
   }
   if (event.type == SDL_CONTROLLERBUTTONUP) {
     switch (event.cbutton.button) {
+      case SDL_CONTROLLER_BUTTON_X: EndRepeat(Action::ToggleChrome); break;
       case SDL_CONTROLLER_BUTTON_DPAD_UP: EndRepeat(Action::Up); break;
       case SDL_CONTROLLER_BUTTON_DPAD_DOWN: EndRepeat(Action::Down); break;
       case SDL_CONTROLLER_BUTTON_DPAD_LEFT: EndRepeat(Action::Left); break;
@@ -775,21 +823,37 @@ GbaFrontend::Action GbaFrontend::Translate(const SDL_Event &event) {
       default: break;
     }
   }
+  if (event.type == SDL_CONTROLLERAXISMOTION &&
+      (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT ||
+       event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT)) {
+    const bool left = event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT;
+    bool &held = left ? left_trigger_held_ : right_trigger_held_;
+    const bool pressed = event.caxis.value > 16000;
+    const bool edge = pressed && !held;
+    held = pressed;
+    return edge ? (left ? Action::QuickTheme : Action::Search) : Action::None;
+  }
+  // A mapped controller also emits joystick events: consume only one stream.
+  if (controller_ && (event.type == SDL_JOYBUTTONDOWN || event.type == SDL_JOYBUTTONUP ||
+                      event.type == SDL_JOYAXISMOTION)) return Action::None;
   if (event.type == SDL_JOYBUTTONDOWN) {
     switch (event.jbutton.button) {
       case 0: return Action::Confirm;
       case 1: return Action::Back;
-      case 2: return Action::ToggleTitles;
-      case 3: return Action::ToggleChrome;
+      case 2: BeginRepeat(Action::ToggleChrome); return Action::ToggleChrome;
+      case 3: return Action::QuickMenu;
       case 4: return Action::TabPrevious;
       case 5: return Action::TabNext;
-      case 8: BeginRepeat(Action::DescriptionUp); return Action::DescriptionUp;
-      case 9: BeginRepeat(Action::DescriptionDown); return Action::DescriptionDown;
+      case 6: return Action::QuickTheme;
+      case 7: return Action::Search;
+      case 8: return Action::Favorite;
+      case 9: return search_open_ ? Action::SearchDone : Action::CoreMenu;
       default: break;
     }
   }
   if (event.type == SDL_JOYBUTTONUP) {
-    if (event.jbutton.button == 8) EndRepeat(Action::DescriptionUp);
+    if (event.jbutton.button == 2) EndRepeat(Action::ToggleChrome);
+    else if (event.jbutton.button == 8) EndRepeat(Action::DescriptionUp);
     else if (event.jbutton.button == 9) EndRepeat(Action::DescriptionDown);
   }
   if (event.type == SDL_JOYAXISMOTION || event.type == SDL_CONTROLLERAXISMOTION) {
@@ -827,7 +891,13 @@ GbaFrontend::Action GbaFrontend::Translate(const SDL_Event &event) {
 
 void GbaFrontend::BeginRepeat(Action action) {
   const Uint32 now = SDL_GetTicks();
-  if (action == Action::Up || action == Action::Down ||
+  if (action == Action::ToggleChrome && search_open_ && search_composition_.empty()) {
+    if (!backspace_held_) {
+      backspace_held_ = true;
+      backspace_started_at_ = now;
+      next_backspace_at_ = now + 450;
+    }
+  } else if (action == Action::Up || action == Action::Down ||
       action == Action::Left || action == Action::Right) {
     held_grid_action_ = action;
     next_grid_repeat_at_ = now + kGridRepeatInitialDelay;
@@ -838,12 +908,20 @@ void GbaFrontend::BeginRepeat(Action action) {
 }
 
 void GbaFrontend::EndRepeat(Action action) {
+  if (action == Action::ToggleChrome) backspace_held_ = false;
   if (held_grid_action_ == action) held_grid_action_ = Action::None;
   if (held_description_action_ == action) held_description_action_ = Action::None;
 }
 
 void GbaFrontend::PollHeldActions() {
   const Uint32 now = SDL_GetTicks();
+  if (!search_open_) backspace_held_ = false;
+  if (backspace_held_ && SDL_TICKS_PASSED(now, next_backspace_at_)) {
+    const Uint32 elapsed = now - backspace_started_at_;
+    next_backspace_at_ = now + (elapsed >= 1600 ? 45 : elapsed >= 900 ? 90 : 180);
+    if (search_composition_.empty()) game_search::Backspace(search_draft_);
+    last_interaction_at_ = now;
+  }
   if (!menu_button_held_ && !settings_open_ && !core_menu_open_ && !version_menu_open_ &&
       held_grid_action_ != Action::None && SDL_TICKS_PASSED(now, next_grid_repeat_at_)) {
     const Action action = held_grid_action_;
@@ -893,8 +971,8 @@ void GbaFrontend::PollEvdevInput() {
           switch (event.code) {
             case BTN_SOUTH: action = Action::Confirm; break;
             case BTN_EAST: action = Action::Back; break;
-            case BTN_NORTH: action = Action::ToggleTitles; break;
-            case BTN_C: action = Action::ToggleChrome; break;
+            case BTN_NORTH: BeginRepeat(Action::ToggleChrome); action = Action::ToggleChrome; break;
+            case BTN_C: action = Action::QuickMenu; break;
             case BTN_WEST:
               if (menu_button_held_) {
                 menu_chord_used_ = true;
@@ -912,21 +990,16 @@ void GbaFrontend::PollEvdevInput() {
               }
               break;
             case BTN_TL: action = Action::Favorite; break;
-            case BTN_TR: action = Action::CoreMenu; break;
-            case BTN_SELECT:
-              action = Action::DescriptionUp;
-              BeginRepeat(action);
-              break;
-            case BTN_START:
-              action = Action::DescriptionDown;
-              BeginRepeat(action);
-              break;
+            case BTN_TR: action = search_open_ ? Action::SearchDone : Action::CoreMenu; break;
+            case BTN_SELECT: action = Action::QuickTheme; break;
+            case BTN_START: action = Action::Search; break;
             case KEY_VOLUMEDOWN: action = Action::VolumeDown; break;
             case KEY_VOLUMEUP: action = Action::VolumeUp; break;
             default: break;
           }
         } else if (event.value == 0) {
-          if (event.code == BTN_SELECT) EndRepeat(Action::DescriptionUp);
+          if (event.code == BTN_NORTH) EndRepeat(Action::ToggleChrome);
+          else if (event.code == BTN_SELECT) EndRepeat(Action::DescriptionUp);
           else if (event.code == BTN_START) EndRepeat(Action::DescriptionDown);
         }
       } else if (event.type == EV_ABS) {
@@ -978,7 +1051,7 @@ void GbaFrontend::Handle(Action action) {
     if (open_menu) Handle(Action::Menu);
     return;
   }
-  if (menu_button_held_ && !settings_open_ && !core_menu_open_ && !version_menu_open_ &&
+  if (menu_button_held_ && !sidebar_open_ && !search_open_ && !help_open_ && !settings_open_ && !core_menu_open_ && !version_menu_open_ &&
       (action == Action::Up || action == Action::Down ||
        action == Action::Left || action == Action::Right)) {
     menu_chord_used_ = true;
@@ -988,6 +1061,58 @@ void GbaFrontend::Handle(Action action) {
       EndRepeat(action);
       action = action == Action::Left ? Action::GridSmaller : Action::GridLarger;
     }
+  }
+  if (exit_dialog_open_ && action != Action::Power && action != Action::VolumeDown &&
+      action != Action::VolumeUp) {
+    if (action == Action::Back || action == Action::Menu || action == Action::QuickMenu) {
+      exit_dialog_open_ = false;
+    } else if (action == Action::Up || action == Action::Down) {
+      exit_dialog_selected_ = (exit_dialog_selected_ + 4 + (action == Action::Up ? -1 : 1)) % 4;
+    } else if (action == Action::Confirm) {
+      exit_dialog_open_ = false;
+      if (exit_dialog_selected_ != 3) {
+        video_.Stop();
+        const int codes[] = {0, kExitRestartSystem, kExitPowerOffSystem};
+        exit_code_ = codes[exit_dialog_selected_];
+        running_ = false;
+      }
+    }
+    return;
+  }
+  if (search_open_ && action != Action::Power && action != Action::VolumeDown &&
+      action != Action::VolumeUp) { HandleSearch(action); return; }
+  if (help_open_ && action != Action::Power && action != Action::VolumeDown &&
+      action != Action::VolumeUp) {
+    if (action == Action::Back || action == Action::Confirm || action == Action::Menu)
+      help_open_ = false;
+    return;
+  }
+  if (sidebar_open_ && action != Action::Power && action != Action::VolumeDown &&
+      action != Action::VolumeUp) {
+    if (action == Action::Back || action == Action::Menu || action == Action::QuickMenu) {
+      sidebar_open_ = false;
+    } else if (action == Action::Search) OpenSearch();
+    else if (action == Action::Up || action == Action::Down) {
+      const int count = quick_menu_open_ ? kQuickSettingsCount : 3;
+      sidebar_selected_ = (sidebar_selected_ + count + (action == Action::Up ? -1 : 1)) % count;
+    } else if (quick_menu_open_) {
+      if (action == Action::QuickTheme) AdjustSetting(11, Action::Right);
+      else if (sidebar_selected_ == 0 && action == Action::Confirm) OpenSearch();
+      else AdjustSetting(kQuickSettings[sidebar_selected_], action);
+    } else if (action == Action::Confirm) {
+      if (sidebar_selected_ == 0) {
+        sidebar_open_ = false;
+        settings_open_ = true;
+        settings_selected_ = settings_scroll_ = 0;
+        RefreshAudio();
+      } else if (sidebar_selected_ == 1) help_open_ = true;
+      else {
+        exit_dialog_open_ = true;
+        exit_dialog_selected_ = 3;
+        held_grid_action_ = Action::None;
+      }
+    }
+    return;
   }
   if (action == Action::GridSmaller || action == Action::GridLarger) {
     const int direction = action == Action::GridSmaller ? 1 : -1;
@@ -1079,114 +1204,17 @@ void GbaFrontend::Handle(Action action) {
     } else if (action == Action::Down) {
       settings_selected_ = (settings_selected_ + 1) % kSettingsCount;
       EnsureSettingsVisible();
-    } else if (settings_selected_ == 0 && action == Action::Confirm) {
-      running_ = false;
-      exit_code_ = 0;
-    } else if (settings_selected_ == 1 &&
-               (action == Action::Confirm || action == Action::Left || action == Action::Right)) {
-      const bool next = !services_.AutostartEnabled();
-      if (services_.SetAutostart(next)) {
-        status_.autostart = next;
-      } else if (options_.diagnostics) {
-        std::cerr << "[gba] failed to update autostart setting\n";
-      }
-    } else if (settings_selected_ == 2 &&
-               (action == Action::Left || action == Action::Right)) {
-      const bool next = !preferences_.use_pegasus_splash;
-      if (services_.SetPegasusSplash(next) || !options_.screenshot_path.empty()) {
-        preferences_.use_pegasus_splash = next;
-        SavePreferences();
-      } else if (options_.diagnostics) {
-        std::cerr << "[gba] failed to update PegasusG splash setting\n";
-      }
-    } else if (settings_selected_ == 3 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      status_.brightness = services_.ChangeBrightness(action == Action::Left ? -1 : 1);
-    } else if (settings_selected_ == 4 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      status_.volume = services_.ChangeVolume(action == Action::Left ? -1 : 1);
-    } else if (settings_selected_ == 5 &&
-               (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      const int direction = action == Action::Left ? -1 : 1;
-      const int value = (static_cast<int>(preferences_.filter_mode) + 3 + direction) % 3;
-      preferences_.filter_mode = static_cast<GbaFilterMode>(value);
-      SavePreferences();
-    } else if (settings_selected_ == 6 &&
-               (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      const bool next = !preferences_.use_recommended_controls;
-      if (services_.SetRecommendedControls(next) || !options_.screenshot_path.empty()) {
-        preferences_.use_recommended_controls = next;
-        SavePreferences();
-      } else if (options_.diagnostics) {
-        std::cerr << "[gba] failed to update recommended RetroArch controls\n";
-      }
-    } else if (settings_selected_ == 7 &&
-               (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      const int direction = action == Action::Left ? -1 : 1;
-      const int value = (static_cast<int>(preferences_.bgm_mode) + 3 + direction) % 3;
-      preferences_.bgm_mode = static_cast<GbaBgmMode>(value);
-      SavePreferences();
-      RefreshAudio();
-    } else if (settings_selected_ == 8 &&
-               (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      preferences_.preview_video_loop = !preferences_.preview_video_loop;
-      SavePreferences();
-      video_.StopVideo();
-      video_start_at_ = 0;
-      video_version_ = 0;
-      if (video_texture_) {
-        SDL_DestroyTexture(video_texture_);
-        video_texture_ = nullptr;
-      }
-      if (!options_.no_video && options_.screenshot_path.empty() &&
-          !selected_video_path_.empty()) {
-        video_start_at_ = SDL_GetTicks() + 300;
-      }
-      RefreshAudio();
-    } else if (settings_selected_ == 9 &&
-               (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      const int direction = action == Action::Left ? -1 : 1;
-      const int value = (static_cast<int>(preferences_.grid_size) + 3 + direction) % 3;
-      preferences_.grid_size = static_cast<GbaGridSize>(value);
-      SavePreferences();
-      EnsureSelectionVisible();
-    } else if (settings_selected_ == 10 &&
-               (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      const int direction = action == Action::Left ? -1 : 1;
-      const int value = (static_cast<int>(preferences_.theme_color) +
-                         kGbaThemeColorCount + direction) % kGbaThemeColorCount;
-      preferences_.theme_color = static_cast<GbaThemeColor>(value);
-      SavePreferences();
-    } else if (settings_selected_ == 11 &&
-               (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      const int direction = action == Action::Left ? -1 : 1;
-      preferences_.cover_title_size_level =
-          (preferences_.cover_title_size_level + kFontSizeLevelCount + direction) %
-          kFontSizeLevelCount;
-      SavePreferences();
-    } else if (settings_selected_ == 12 &&
-               (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
-      const int direction = action == Action::Left ? -1 : 1;
-      preferences_.description_size_level =
-          (preferences_.description_size_level + kFontSizeLevelCount + direction) %
-          kFontSizeLevelCount;
-      description_scroll_line_ = 0;
-      SavePreferences();
-    } else if (settings_selected_ == 13 && action == Action::Confirm) {
-      video_.Stop();
-      exit_code_ = kExitRestartSystem;
-      running_ = false;
-    } else if (settings_selected_ == 14 && action == Action::Confirm) {
-      video_.Stop();
-      exit_code_ = kExitPowerOffSystem;
-      running_ = false;
+    } else {
+      AdjustSetting(settings_selected_, action);
     }
     return;
   }
-  if (action == Action::Menu) {
-    description_highlighted_ = false;
-    settings_open_ = true;
-    settings_selected_ = 0;
-    settings_scroll_ = 0;
-    RefreshAudio();
+  if (action == Action::Search) { OpenSearch(); return; }
+  if (action == Action::Menu || action == Action::Back || action == Action::QuickMenu) {
+    sidebar_open_ = true;
+    quick_menu_open_ = action == Action::QuickMenu;
+    sidebar_selected_ = 0;
+    held_grid_action_ = Action::None;
     return;
   }
   if (action == Action::CoreMenu) {
@@ -1211,19 +1239,12 @@ void GbaFrontend::Handle(Action action) {
     description_highlighted_ = false;
     SavePreferences();
     EnsureSelectionVisible();
-    return;
-  }
-  if (action == Action::DescriptionUp || action == Action::DescriptionDown) {
-    const GbaGame *game = SelectedGame();
-    const int max_scroll = game ? std::max(0, static_cast<int>(
-        WrappedTextLines(game->description, 214, DescriptionFontSize()).size()) -
-        DescriptionVisibleLines()) : 0;
-    description_highlighted_ = game != nullptr;
-    if (action == Action::DescriptionUp) {
-      description_scroll_line_ = std::max(0, description_scroll_line_ - 1);
-    } else {
-      description_scroll_line_ = std::min(max_scroll, description_scroll_line_ + 1);
-    }
+    video_.StopVideo();
+    video_start_at_ = 0;
+    video_version_ = 0;
+    if (video_texture_) { SDL_DestroyTexture(video_texture_); video_texture_ = nullptr; }
+    selected_video_path_.clear();
+    SelectionChanged();
     return;
   }
   if (action == Action::TabPrevious || action == Action::TabNext) {
@@ -1278,22 +1299,28 @@ void GbaFrontend::Handle(Action action) {
   } else if (action == Action::Down && selected_ + columns < static_cast<int>(visible_.size())) {
     selected_ += columns;
   }
-  else if (action == Action::Back) {
-    description_highlighted_ = false;
-    settings_open_ = true;
-    settings_selected_ = 0;
-    settings_scroll_ = 0;
-    RefreshAudio();
-    return;
-  } else if (action == Action::Favorite) {
+  if (action == Action::Favorite) {
     if (GbaGame *game = SelectedGame()) {
+      const std::string id = game->id;
       game->favorite = !game->favorite;
+      game->favorite_order = 0;
+      if (game->favorite) {
+        for (const GbaGame &entry : games_)
+          game->favorite_order = std::max(game->favorite_order, entry.favorite_order);
+        ++game->favorite_order;
+      }
       state_.Save(games_);
       SetOsd(game->favorite ? "已加入收藏" : "已取消收藏");
-      if (active_tab_ == kTabFavorite) {
-        RefreshVisible();
-        SelectionChanged();
-      }
+      if (!game->favorite && active_tab_ == kTabFavorite)
+        active_tab_ = game->is_rumble ? kTabRumble : game->is_mod ? kTabMod : kTabGba;
+      RefreshVisible();
+      const auto found = std::find_if(visible_.begin(), visible_.end(), [&](int index) {
+        return games_[index].id == id;
+      });
+      if (found != visible_.end()) selected_ = static_cast<int>(found - visible_.begin());
+      EnsureSelectionVisible();
+      SelectionChanged();
+      return;
     }
   } else if (action == Action::Confirm) {
     if (GbaGame *game = SelectedGame()) {
@@ -1341,6 +1368,7 @@ void GbaFrontend::RefreshVisible() {
   visible_.clear();
   for (int i = 0; i < static_cast<int>(games_.size()); ++i) {
     const GbaGame &game = games_[i];
+    if (!game_search::Matches(search_keys_[i], search_query_)) continue;
     if (active_tab_ == kTabRecent && game.recent_order == 0) continue;
     if (active_tab_ == kTabGba && (game.is_mod || game.is_rumble)) continue;
     if (active_tab_ == kTabMod && (!game.is_mod || game.is_rumble)) continue;
@@ -1353,6 +1381,10 @@ void GbaFrontend::RefreshVisible() {
       return games_[left].recent_order > games_[right].recent_order;
     });
   }
+  std::stable_sort(visible_.begin(), visible_.end(), [&](int left, int right) {
+    if (games_[left].favorite != games_[right].favorite) return games_[left].favorite;
+    return games_[left].favorite && games_[left].favorite_order < games_[right].favorite_order;
+  });
   selected_ = std::clamp(selected_, 0, std::max(0, static_cast<int>(visible_.size()) - 1));
   EnsureSelectionVisible();
 }
@@ -1386,7 +1418,7 @@ void GbaFrontend::PrewarmNextGameAsset() {
 }
 
 int GbaFrontend::GridColumns() const {
-  const int fullscreen_extra = preferences_.fullscreen_grid ? 1 : 0;
+  const int fullscreen_extra = (preferences_.fullscreen_grid ? 1 : 0) + (canvas_width_ - 720) / 160;
   switch (preferences_.grid_size) {
     case GbaGridSize::Large: return 3 + fullscreen_extra;
     case GbaGridSize::Small: return 5 + fullscreen_extra;
@@ -1396,13 +1428,13 @@ int GbaFrontend::GridColumns() const {
 }
 
 int GbaFrontend::GridCardSize() const {
-  const int width = preferences_.fullscreen_grid ? 720 : kGridWidth;
+  const int width = preferences_.fullscreen_grid ? canvas_width_ : canvas_width_ - kGridX;
   const int inset = preferences_.fullscreen_grid ? kFullscreenGridInset : kGridInset;
   return (width - inset * 2) / GridColumns();
 }
 
 int GbaFrontend::GridVisibleRows() const {
-  const int height = preferences_.fullscreen_grid ? 480 : kGridHeight;
+  const int height = preferences_.fullscreen_grid ? canvas_height_ : canvas_height_ - kGridY;
   const int inset = preferences_.fullscreen_grid ? kFullscreenGridInset : kGridInset;
   return std::max(1, (height - inset * 2) / GridCardSize());
 }
@@ -1430,7 +1462,7 @@ int GbaFrontend::DescriptionLineHeight() const {
 }
 
 int GbaFrontend::DescriptionVisibleLines() const {
-  return std::max(1, kDescriptionTextHeight / DescriptionLineHeight());
+  return std::max(1, (kDescriptionTextHeight + canvas_height_ - 480) / DescriptionLineHeight());
 }
 
 void GbaFrontend::EnsureSelectionVisible() {
@@ -1570,7 +1602,7 @@ void GbaFrontend::RefreshAudio() {
       video_.SetAudio(selected_eight_bit_track_, false);
       return;
     }
-    if (preferences_.bgm_mode == GbaBgmMode::GameAudio && !options_.no_video &&
+    if (preferences_.bgm_mode == GbaBgmMode::GameAudio && !preferences_.fullscreen_grid && !options_.no_video &&
         video_start_at_ == 0 && !selected_video_path_.empty()) {
       video_.SetAudio(selected_video_path_, preferences_.preview_video_loop);
       return;
@@ -1584,7 +1616,8 @@ void GbaFrontend::SelectionChanged() {
   description_highlighted_ = false;
   selected_title_started_at_ = SDL_GetTicks();
   const GbaGame *game = SelectedGame();
-  const std::string path = game ? game->video_path : std::string{};
+  description_next_at_ = SDL_GetTicks() + 3500;
+  const std::string path = game && !preferences_.fullscreen_grid ? game->video_path : std::string{};
   if (path == selected_video_path_) {
     RefreshAudio();
     return;
@@ -1619,38 +1652,17 @@ void GbaFrontend::PollHall() {
   const Uint32 now = SDL_GetTicks();
   if (now < next_hall_poll_) return;
   next_hall_poll_ = now + 250;
-  const int current = services_.HallState();
-  if (hall_state_ == 1 && current == 0) {
-    if (!SuspendInPlace(true)) {
-      exit_code_ = kExitSuspendAutomatic;
-      running_ = false;
-    }
-    return;
-  }
-  if (current >= 0) hall_state_ = current;
+  HandleHallState(services_.HallState());
 }
 
-bool GbaFrontend::SuspendInPlace(bool automatic) {
-  osd_text_.clear();
-  osd_until_ = 0;
-  volume_hint_until_ = 0;
-  SaveUiState();
-  if (options_.diagnostics) std::cerr << "[gba] suspending in place reason=hall\n";
-  DestroyRuntime();
-  const bool suspended = services_.Suspend(automatic);
-  if (!InitializeRuntime()) {
-    std::cerr << "[gba] runtime reinitialization failed after resume\n";
-    return false;
+void GbaFrontend::HandleHallState(int current) {
+  if (hall_state_ == 1 && current == 0) {
+    // Let the launcher suspend after SDL exits and recreate it on wake.
+    video_.Stop();
+    exit_code_ = preferences_.super_standby ? kExitSuspendAutomaticDeep : kExitSuspendAutomatic;
+    running_ = false;
   }
-  next_status_poll_ = 0;
-  next_hall_poll_ = SDL_GetTicks() + 500;
-  PollStatus();
-  hall_state_ = services_.HallState();
-  SelectionChanged();
-  if (options_.diagnostics) {
-    std::cerr << "[gba] resumed in place suspend_rc=" << (suspended ? 0 : 1) << '\n';
-  }
-  return suspended;
+  if (current >= 0) hall_state_ = current;
 }
 
 void GbaFrontend::RestoreUiState() {
@@ -1680,6 +1692,7 @@ void GbaFrontend::SaveUiState() const {
 }
 
 void GbaFrontend::UpdateVideoTexture() {
+  if (preferences_.fullscreen_grid) return;
   if (!settings_open_ && video_start_at_ != 0 &&
       SDL_TICKS_PASSED(SDL_GetTicks(), video_start_at_)) {
     video_start_at_ = 0;
@@ -1697,7 +1710,7 @@ void GbaFrontend::UpdateVideoTexture() {
 }
 
 void GbaFrontend::Render() {
-  Fill(renderer_, SDL_Rect{0, 0, 720, 480}, kBackground);
+  Fill(renderer_, SDL_Rect{0, 0, canvas_width_, canvas_height_}, kBackground);
   if (settings_open_) {
     RenderSettings();
     return;
@@ -1710,16 +1723,20 @@ void GbaFrontend::Render() {
     tab_transition_started_at_ = SDL_GetTicks();
     tab_transition_pending_start_ = false;
   }
+  RenderHints();
+  if (sidebar_open_ || help_open_) RenderSidebar();
+  if (search_open_) RenderSearch();
   if (core_menu_open_) RenderCoreMenu();
   if (version_menu_open_) RenderVersionMenu();
   RenderOsd();
+  if (exit_dialog_open_) RenderExitDialog();
 }
 
 void GbaFrontend::RenderTopBar(int y_offset) {
-  SDL_Rect viewport{0, y_offset, 720, 480};
+  SDL_Rect viewport{0, y_offset, canvas_width_, canvas_height_};
   SDL_RenderSetViewport(renderer_, &viewport);
   const ThemeColors theme = ColorsForTheme(preferences_.theme_color);
-  Fill(renderer_, SDL_Rect{0, 0, 720, 45}, theme.bar);
+  Fill(renderer_, SDL_Rect{0, 0, canvas_width_, 45}, theme.bar);
 
   struct TabVisual {
     int tab = 0;
@@ -1779,7 +1796,7 @@ void GbaFrontend::RenderTopBar(int y_offset) {
     }
   }
 
-  const SDL_Rect tabs_clip{0, 0, 574, 45};
+  const SDL_Rect tabs_clip{0, 0, std::min(574, canvas_width_ - 170), 45};
   SDL_RenderSetClipRect(renderer_, &tabs_clip);
   for (const TabVisual &visual : visuals) {
     if (visual.selected) {
@@ -1800,8 +1817,13 @@ void GbaFrontend::RenderTopBar(int y_offset) {
     SDL_RenderDrawLine(renderer_, tab_x + width - 8, 42, tab_x + width + 8, 2);
   }
   SDL_RenderSetClipRect(renderer_, nullptr);
+  SDL_SetRenderDrawColor(renderer_, 215, 217, 220, 255);
+  SDL_RenderDrawLine(renderer_, 0, 44, canvas_width_ - 1, 44);
+  viewport.x = canvas_width_ - 720;
+  viewport.w = std::max(720, canvas_width_);
+  SDL_RenderSetViewport(renderer_, &viewport);
   if (status_.volume >= 0 && now < volume_hint_until_) {
-    DrawTextRight("音量 " + std::to_string(status_.volume), 574, 14, 13,
+    DrawTextRight("前端音量 " + std::to_string(status_.volume), 574, 14, 13,
                   SDL_Color{255, 255, 255, 255});
   } else {
     const GbaGame *game = SelectedGame();
@@ -1811,8 +1833,6 @@ void GbaFrontend::RenderTopBar(int y_offset) {
     DrawTextRight(PaddedNumber(static_cast<int>(visible_.size())), 574, 23, 12,
                   SDL_Color{255, 255, 255, 255});
   }
-  SDL_SetRenderDrawColor(renderer_, 215, 217, 220, 255);
-  SDL_RenderDrawLine(renderer_, 0, 44, 719, 44);
 
   constexpr SDL_Color kStatusWhite{255, 255, 255, 255};
   const SDL_Rect logo_bounds{584, 2, 36, 36};
@@ -1860,12 +1880,12 @@ void GbaFrontend::RenderTopBar(int y_offset) {
 }
 
 void GbaFrontend::RenderGameInfo(int x_offset) {
-  SDL_Rect viewport{x_offset, 0, 720, 480};
+  SDL_Rect viewport{x_offset, 0, canvas_width_, canvas_height_};
   SDL_RenderSetViewport(renderer_, &viewport);
   const GbaGame *game = SelectedGame();
-  Fill(renderer_, SDL_Rect{0, 45, 240, 435}, kBackground);
+  Fill(renderer_, SDL_Rect{0, 45, 240, canvas_height_ - 45}, kBackground);
   SDL_SetRenderDrawColor(renderer_, 50, 52, 55, 255);
-  SDL_RenderDrawLine(renderer_, 239, 45, 239, 479);
+  SDL_RenderDrawLine(renderer_, 239, 45, 239, canvas_height_ - 1);
 
   if (!game) {
     DrawText("此分类暂无游戏", 120, 214, 18, kMuted, 208, true);
@@ -1887,10 +1907,19 @@ void GbaFrontend::RenderGameInfo(int x_offset) {
   }
   Stroke(renderer_, video_bounds, SDL_Color{58, 61, 65, 255});
   if (!game->developer.empty()) DrawText(game->developer, 13, 278, 12, kMuted, 214);
-  const SDL_Rect details_bounds{7, 294, 226, 181};
+  const SDL_Rect details_bounds{7, 294, 226, canvas_height_ - 299};
   if (description_highlighted_) {
     Fill(renderer_, details_bounds, SDL_Color{18, 20, 23, 255});
     Stroke(renderer_, details_bounds, SDL_Color{255, 255, 255, 220});
+  }
+  const Uint32 now = SDL_GetTicks();
+  const int max_scroll = std::max(0, static_cast<int>(
+      WrappedTextLines(game->description, 214, DescriptionFontSize()).size()) - DescriptionVisibleLines());
+  description_scroll_line_ = std::min(description_scroll_line_, max_scroll);
+  if (!preferences_.fullscreen_grid && !sidebar_open_ && !search_open_ && !help_open_ &&
+      max_scroll > 0 && SDL_TICKS_PASSED(now, description_next_at_)) {
+    description_scroll_line_ = description_scroll_line_ < max_scroll ? description_scroll_line_ + 1 : 0;
+    description_next_at_ = now + ((description_scroll_line_ == max_scroll || description_scroll_line_ == 0) ? 3500 : 1700);
   }
   DrawWrappedText(game->description, 13, 302, 214, DescriptionLineHeight(),
                   DescriptionVisibleLines(), DescriptionFontSize(), kInk,
@@ -1904,9 +1933,9 @@ void GbaFrontend::RenderGrid(float chrome_hidden_progress) {
   const int grid_x = static_cast<int>(std::lround(kGridX * (1.0f - progress)));
   const int grid_y = static_cast<int>(std::lround(kGridY * (1.0f - progress)));
   const int grid_width = static_cast<int>(std::lround(
-      kGridWidth + (720 - kGridWidth) * progress));
+      canvas_width_ - kGridX * (1.0f - progress)));
   const int grid_height = static_cast<int>(std::lround(
-      kGridHeight + (480 - kGridHeight) * progress));
+      canvas_height_ - kGridY * (1.0f - progress)));
   const int grid_inset = static_cast<int>(std::lround(
       kGridInset + (kFullscreenGridInset - kGridInset) * progress));
   const int card_size = std::max(1, (grid_width - grid_inset * 2) / columns);
@@ -1944,11 +1973,7 @@ void GbaFrontend::RenderGrid(float chrome_hidden_progress) {
                      SDL_Rect{cover.x + 4, cover.y + cover.h - title_height + 4,
                               cover.w - 8, title_height - 4},
                      CoverTitleFontSize(), kInk, highlighted, SDL_GetTicks());
-      if (game.favorite) {
-        DrawText("*", cover.x + cover.w - 11, cover.y + 3, 20, kAccent, 16, true);
-      }
     }
-
     if (highlighted) {
       constexpr double kPi = 3.14159265358979323846;
       const double phase = (SDL_GetTicks() % 1400) / 1400.0 * 2.0 * kPi;
@@ -1958,6 +1983,20 @@ void GbaFrontend::RenderGrid(float chrome_hidden_progress) {
       Stroke(renderer_, inner, SDL_Color{255, 255, 255, static_cast<Uint8>(alpha / 2)});
     } else {
       Stroke(renderer_, cover, SDL_Color{55, 57, 60, 255});
+    }
+    if (game.favorite) {
+      const int size = std::clamp(cover.w / 5, 18, 28);
+      const int overflow = highlighted ? size / 4 : 0;
+      const SDL_Rect heart{std::min(cover.x + cover.w - size + overflow, grid_clip.x + grid_clip.w - size - 2),
+                           std::max(cover.y - overflow, grid_clip.y + 2), size, size};
+      for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+          if (dx * dx + dy * dy <= 4)
+            DrawIcon(6, SDL_Rect{heart.x + dx, heart.y + dy, size, size},
+                     SDL_Color{255, 255, 255, 255});
+        }
+      }
+      DrawIcon(6, heart, SDL_Color{240, 50, 74, 255});
     }
   };
 
@@ -2005,7 +2044,11 @@ void GbaFrontend::RenderGrid(float chrome_hidden_progress) {
 }
 
 void GbaFrontend::RenderSettings() {
-  Fill(renderer_, SDL_Rect{0, 0, 720, 480}, SDL_Color{11, 12, 14, 255});
+  Fill(renderer_, SDL_Rect{0, 0, canvas_width_, canvas_height_}, SDL_Color{11, 12, 14, 255});
+  const int width = std::min(720, canvas_width_);
+  const SDL_Rect viewport{(canvas_width_ - width) / 2, (canvas_height_ - 480) / 2,
+                          std::max(720, canvas_width_), std::max(480, canvas_height_)};
+  SDL_RenderSetViewport(renderer_, &viewport);
   constexpr int kTitleY = 25;
   constexpr int kTitleSize = 28;
   constexpr int kBrandSize = 13;
@@ -2025,11 +2068,11 @@ void GbaFrontend::RenderSettings() {
                                  &version_height);
   const int version_y = kTitleY + std::max(0, title_height - version_height);
   DrawText("设置", 36, kTitleY, kTitleSize, kInk);
-  DrawTextRight(brand_text, 683, version_y - brand_height,
+  DrawTextRight(brand_text, width - 37, version_y - brand_height,
                 kBrandSize, kInk);
-  DrawTextRight(version_text, 683, version_y, kVersionSize, kMuted);
+  DrawTextRight(version_text, width - 37, version_y, kVersionSize, kMuted);
   SDL_SetRenderDrawColor(renderer_, 72, 75, 80, 255);
-  SDL_RenderDrawLine(renderer_, 36, 66, 683, 66);
+  SDL_RenderDrawLine(renderer_, 36, 66, width - 37, 66);
 
   const std::string bgm_values[] = {"8bit", "游戏音", "静音"};
   const std::string filter_values[] = {"校色", "原色", "自定义"};
@@ -2040,14 +2083,15 @@ void GbaFrontend::RenderSettings() {
       "金属深蓝", "冰川蓝", "绿透", "灰色", "红透",
   };
   const std::string labels[kSettingsCount] = {
-      "返回官方系统", "开机自动进入", "使用天马启动页", "屏幕亮度", "音量", "GBA游戏滤镜",
-      "使用推荐按键配置", "背景音乐", "预览视频", "封面大小", "主题颜色", "封面标题字号", "介绍文字字号", "重启", "关机",
+      "返回官方系统", "开机自动进入", "使用天马启动页", "屏幕亮度", "前端音量", "系统音量", "GBA游戏滤镜",
+      "使用推荐按键配置", "背景音乐", "预览视频", "封面大小", "主题颜色", "封面标题字号", "介绍文字字号", "待机模式", "重启", "关机",
   };
   const std::string values[kSettingsCount] = {
       "", status_.autostart ? "< 开启 >" : "< 关闭 >",
       preferences_.use_pegasus_splash ? "< 使用 >" : "< 不使用 >",
       "< " + std::to_string(std::max(0, status_.brightness)) + " >",
       "< " + std::to_string(std::max(0, status_.volume)) + " >",
+      preferences_.system_volume == 0 ? "< 同步 >" : "< " + std::to_string(preferences_.system_volume) + " >",
       "< " + filter_values[static_cast<int>(preferences_.filter_mode)] + " >",
       preferences_.use_recommended_controls ? "< 使用 >" : "< 不使用 >",
       "< " + bgm_values[static_cast<int>(preferences_.bgm_mode)] + " >",
@@ -2056,6 +2100,7 @@ void GbaFrontend::RenderSettings() {
       "< " + theme_values[static_cast<int>(preferences_.theme_color)] + " >",
       "< " + std::to_string(CoverTitleFontSize()) + " >",
       "< " + std::to_string(DescriptionFontSize()) + " >",
+      preferences_.super_standby ? "< 超长待机 >" : "< 默认待机 >",
       "", "",
   };
 
@@ -2065,27 +2110,27 @@ void GbaFrontend::RenderSettings() {
   for (int slot = 0; slot < kVisibleRows; ++slot) {
     const int index = settings_scroll_ + slot;
     if (index >= kSettingsCount) break;
-    const SDL_Rect row{36, kRowY + slot * kRowHeight, 648, kRowHeight};
+    const SDL_Rect row{36, kRowY + slot * kRowHeight, width - 72, kRowHeight};
     if (index == settings_selected_) {
       Fill(renderer_, row, SDL_Color{42, 45, 50, 255});
       Fill(renderer_, SDL_Rect{36, row.y, 4, row.h}, kAccent);
     }
     DrawText(labels[index], 56, row.y + 19, 19, kInk, 390);
-    if (index == 10) {
+    if (index == 11) {
       const ThemeColors theme = ColorsForTheme(preferences_.theme_color);
-      const SDL_Rect swatch{526, row.y + 19, 22, 22};
+      const SDL_Rect swatch{width - 194, row.y + 19, 22, 22};
       Fill(renderer_, swatch, theme.bar);
       Stroke(renderer_, swatch, theme.selected);
     }
     if (!values[index].empty()) {
-      DrawText(values[index], 625, row.y + 19, 18,
+      DrawText(values[index], width - 95, row.y + 19, 18,
                index == settings_selected_ ? kAccent : kMuted, 130, true);
     }
     SDL_SetRenderDrawColor(renderer_, 44, 47, 51, 255);
-    SDL_RenderDrawLine(renderer_, 48, row.y + row.h - 1, 672, row.y + row.h - 1);
+    SDL_RenderDrawLine(renderer_, 48, row.y + row.h - 1, width - 48, row.y + row.h - 1);
   }
 
-  constexpr int kScrollTrackX = 700;
+  const int kScrollTrackX = width - 20;
   constexpr int kScrollTrackWidth = 6;
   constexpr int kScrollTrackHeight = kVisibleRows * kRowHeight;
   const int thumb_height = std::max(
@@ -2099,10 +2144,14 @@ void GbaFrontend::RenderSettings() {
   Fill(renderer_, SDL_Rect{kScrollTrackX, thumb_y, kScrollTrackWidth,
                            thumb_height},
        SDL_Color{139, 143, 149, 255});
+  SDL_RenderSetViewport(renderer_, nullptr);
 }
 
 void GbaFrontend::RenderCoreMenu() {
-  Fill(renderer_, SDL_Rect{0, 0, 720, 480}, SDL_Color{0, 0, 0, 96});
+  Fill(renderer_, SDL_Rect{0, 0, canvas_width_, canvas_height_}, SDL_Color{0, 0, 0, 96});
+  const SDL_Rect viewport{(canvas_width_ - 720) / 2, (canvas_height_ - 480) / 2,
+                          std::max(720, canvas_width_), std::max(480, canvas_height_)};
+  SDL_RenderSetViewport(renderer_, &viewport);
   const SDL_Rect dialog{224, 102, 272, 276};
   Fill(renderer_, dialog, SDL_Color{17, 18, 20, 248});
   Stroke(renderer_, dialog, SDL_Color{112, 116, 122, 255});
@@ -2124,23 +2173,24 @@ void GbaFrontend::RenderCoreMenu() {
     DrawText(options[index], 360, row.y + 9, 18,
              index == core_menu_selected_ ? kAccent : kInk, 210, true);
   }
+  SDL_RenderSetViewport(renderer_, nullptr);
 }
 
 void GbaFrontend::RenderVersionMenu() {
   const std::vector<std::string> roms = SelectedRomOptions();
   if (roms.empty()) return;
-  Fill(renderer_, SDL_Rect{0, 0, 720, 480}, SDL_Color{0, 0, 0, 112});
+  Fill(renderer_, SDL_Rect{0, 0, canvas_width_, canvas_height_}, SDL_Color{0, 0, 0, 112});
   const int visible_rows = std::min(kVersionMenuVisibleRows, static_cast<int>(roms.size()));
   const int dialog_height = 78 + visible_rows * 45;
-  const SDL_Rect dialog{120, (480 - dialog_height) / 2, 480, dialog_height};
+  const SDL_Rect dialog{(canvas_width_ - 480) / 2, (canvas_height_ - dialog_height) / 2, 480, dialog_height};
   Fill(renderer_, dialog, SDL_Color{17, 18, 20, 250});
   Stroke(renderer_, dialog, SDL_Color{112, 116, 122, 255});
-  DrawText("选择游戏版本", 360, dialog.y + 17, 20, kInk, 440, true);
+  DrawText("选择游戏版本", canvas_width_ / 2, dialog.y + 17, 20, kInk, 440, true);
 
   for (int slot = 0; slot < visible_rows; ++slot) {
     const int index = version_menu_scroll_ + slot;
     if (index >= static_cast<int>(roms.size())) break;
-    const SDL_Rect row{140, dialog.y + 58 + slot * 45, 440, 38};
+    const SDL_Rect row{(canvas_width_ - 440) / 2, dialog.y + 58 + slot * 45, 440, 38};
     if (index == version_menu_selected_) {
       Fill(renderer_, row, SDL_Color{48, 51, 56, 255});
       Fill(renderer_, SDL_Rect{row.x, row.y, 4, row.h}, kAccent);
@@ -2151,6 +2201,378 @@ void GbaFrontend::RenderVersionMenu() {
   }
 }
 
+namespace {
+constexpr int kKeyboardColumns = 12;
+constexpr const char kKeyboardRows[][kKeyboardColumns + 1] = {
+    "1234567890[]", "qwertyuiop-_", "asdfghjkl:/'", "zxcvbnm.,!?+"};
+}
+
+void GbaFrontend::OpenSearch() {
+  EndRepeat(Action::ToggleChrome);
+  sidebar_open_ = false;
+  search_open_ = true;
+  search_draft_ = search_query_;
+  search_composition_.clear();
+  keyboard_row_ = 1;
+  keyboard_column_ = 0;
+  held_grid_action_ = Action::None;
+  SDL_StartTextInput();
+  SDL_Rect input{};
+  int right = 0, bottom = 0;
+  const float x = 83 + (canvas_width_ - 720) / 2;
+  const float y = 142 + (canvas_height_ - 480) / 2;
+  SDL_RenderLogicalToWindow(renderer_, x, y, &input.x, &input.y);
+  SDL_RenderLogicalToWindow(renderer_, x + 554, y + 38, &right, &bottom);
+  input.w = right - input.x;
+  input.h = bottom - input.y;
+  SDL_SetTextInputRect(&input);
+}
+
+void GbaFrontend::HandleSearch(Action action) {
+  if (action == Action::SearchDone) {
+    search_query_ = search_draft_;
+    search_open_ = false;
+    SDL_StopTextInput();
+    held_grid_action_ = Action::None;
+    selected_ = scroll_row_ = 0;
+    RefreshVisible();
+    SelectionChanged();
+  } else if (action == Action::Menu || action == Action::Back) {
+    EndRepeat(Action::ToggleChrome);
+    search_open_ = false;
+    SDL_StopTextInput();
+    held_grid_action_ = Action::None;
+  } else if (action == Action::Favorite) {
+    EndRepeat(Action::ToggleChrome);
+    search_draft_.clear();
+    search_composition_.clear();
+    SDL_StopTextInput();
+    SDL_StartTextInput();
+  } else if (action == Action::ToggleChrome) {
+    game_search::Backspace(search_draft_);
+  } else if (action == Action::TabPrevious) keyboard_upper_ = !keyboard_upper_;
+  else if (action == Action::QuickMenu && search_draft_.size() < 240) search_draft_ += ' ';
+  else if (action == Action::Up || action == Action::Down) {
+    keyboard_row_ = std::clamp(keyboard_row_ + (action == Action::Up ? -1 : 1), 0, 4);
+  } else if (action == Action::Left || action == Action::Right) {
+    const int step = keyboard_row_ == 4 ? 2 : 1;
+    keyboard_column_ = (keyboard_column_ + kKeyboardColumns +
+        (action == Action::Left ? -step : step)) % kKeyboardColumns;
+  } else if (action == Action::Confirm && keyboard_row_ == 4) {
+    const Action operations[] = {Action::TabPrevious, Action::QuickMenu, Action::ToggleChrome, Action::Back, Action::Favorite, Action::SearchDone};
+    HandleSearch(operations[keyboard_column_ / 2]);
+  } else if (action == Action::Confirm && search_draft_.size() < 240) {
+    char ch = kKeyboardRows[keyboard_row_][keyboard_column_];
+    search_draft_ += keyboard_upper_ ? static_cast<char>(std::toupper(static_cast<unsigned char>(ch))) : ch;
+  }
+}
+
+void GbaFrontend::AdjustSetting(int index, Action action) {
+  if (index == 0 && action == Action::Confirm) {
+    running_ = false;
+    exit_code_ = 0;
+  } else if (index == 1 &&
+             (action == Action::Confirm || action == Action::Left || action == Action::Right)) {
+    const bool next = !services_.AutostartEnabled();
+    if (services_.SetAutostart(next)) {
+      status_.autostart = next;
+    } else if (options_.diagnostics) {
+      std::cerr << "[gba] failed to update autostart setting\n";
+    }
+  } else if (index == 2 &&
+             (action == Action::Left || action == Action::Right)) {
+    const bool next = !preferences_.use_pegasus_splash;
+    if (services_.SetPegasusSplash(next) || !options_.screenshot_path.empty()) {
+      preferences_.use_pegasus_splash = next;
+      SavePreferences();
+    } else if (options_.diagnostics) {
+      std::cerr << "[gba] failed to update PegasusG splash setting\n";
+    }
+  } else if (index == 3 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    status_.brightness = services_.ChangeBrightness(action == Action::Left ? -1 : 1);
+  } else if (index == 4 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    status_.volume = services_.ChangeVolume(action == Action::Left ? -1 : 1);
+  } else if (index == 6 &&
+             (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    const int direction = action == Action::Left ? -1 : 1;
+    const int value = (static_cast<int>(preferences_.filter_mode) + 3 + direction) % 3;
+    preferences_.filter_mode = static_cast<GbaFilterMode>(value);
+    SavePreferences();
+  } else if (index == 7 &&
+             (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    const bool next = !preferences_.use_recommended_controls;
+    if (services_.SetRecommendedControls(next) || !options_.screenshot_path.empty()) {
+      preferences_.use_recommended_controls = next;
+      SavePreferences();
+    } else if (options_.diagnostics) {
+      std::cerr << "[gba] failed to update recommended RetroArch controls\n";
+    }
+  } else if (index == 8 &&
+             (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    const int direction = action == Action::Left ? -1 : 1;
+    const int value = (static_cast<int>(preferences_.bgm_mode) + 3 + direction) % 3;
+    preferences_.bgm_mode = static_cast<GbaBgmMode>(value);
+    SavePreferences();
+    RefreshAudio();
+  } else if (index == 9 &&
+             (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    preferences_.preview_video_loop = !preferences_.preview_video_loop;
+    SavePreferences();
+    video_.StopVideo();
+    video_start_at_ = 0;
+    video_version_ = 0;
+    if (video_texture_) {
+      SDL_DestroyTexture(video_texture_);
+      video_texture_ = nullptr;
+    }
+    if (!options_.no_video && options_.screenshot_path.empty() &&
+        !selected_video_path_.empty()) {
+      video_start_at_ = SDL_GetTicks() + 300;
+    }
+    RefreshAudio();
+  } else if (index == 10 &&
+             (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    const int direction = action == Action::Left ? -1 : 1;
+    const int value = (static_cast<int>(preferences_.grid_size) + 3 + direction) % 3;
+    preferences_.grid_size = static_cast<GbaGridSize>(value);
+    SavePreferences();
+    EnsureSelectionVisible();
+  } else if (index == 11 &&
+             (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    const int direction = action == Action::Left ? -1 : 1;
+    const int value = (static_cast<int>(preferences_.theme_color) +
+                       kGbaThemeColorCount + direction) % kGbaThemeColorCount;
+    preferences_.theme_color = static_cast<GbaThemeColor>(value);
+    SavePreferences();
+  } else if (index == 12 &&
+             (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    const int direction = action == Action::Left ? -1 : 1;
+    preferences_.cover_title_size_level =
+        (preferences_.cover_title_size_level + kFontSizeLevelCount + direction) %
+        kFontSizeLevelCount;
+    SavePreferences();
+  } else if (index == 13 &&
+             (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    const int direction = action == Action::Left ? -1 : 1;
+    preferences_.description_size_level =
+        (preferences_.description_size_level + kFontSizeLevelCount + direction) %
+        kFontSizeLevelCount;
+    description_scroll_line_ = 0;
+    SavePreferences();
+  } else if (index == 5 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    const int direction = action == Action::Left ? -1 : 1;
+    preferences_.system_volume = (preferences_.system_volume + 10 + direction) % 10;
+    SavePreferences();
+  } else if (index == 14 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    preferences_.super_standby = !preferences_.super_standby;
+    SavePreferences();
+  } else if (index == 15 && action == Action::Confirm) {
+    video_.Stop();
+    exit_code_ = kExitRestartSystem;
+    running_ = false;
+  } else if (index == 16 && action == Action::Confirm) {
+    video_.Stop();
+    exit_code_ = kExitPowerOffSystem;
+    running_ = false;
+  }
+  if (index == 17 && (action == Action::Left || action == Action::Right || action == Action::Confirm)) {
+    preferences_.show_cover_titles = !preferences_.show_cover_titles;
+    SavePreferences();
+  }
+}
+
+void GbaFrontend::RenderHints() {
+  const char *keys[] = {"A", "B", "X", "Y", "L/R", "L2", "R2", "SE", "ST"};
+  const char *labels[] = {"启动", "菜单", preferences_.fullscreen_grid ? "返回" : "全屏",
+                          "快捷菜单", "分类", "换色", "搜索", "收藏", "核心"};
+  constexpr int count = 9, padding = 4, gap = 4;
+  const int right = canvas_width_ - 6;
+  int size = 13, first = 0;
+  int key_widths[count], label_widths[count], total = gap * (count - 1);
+  const auto measure = [&](const char *text) {
+    int width = 0;
+    if (TTF_Font *font = Font(size)) TTF_SizeUTF8(font, text, &width, nullptr);
+    return width;
+  };
+  while (true) {
+    total = gap * (count - first - 1);
+    for (int i = first; i < count; ++i) {
+      key_widths[i] = std::max(14, measure(keys[i]) + 5);
+      label_widths[i] = measure(labels[i]);
+      total += key_widths[i] + 3 + label_widths[i];
+    }
+    if (total + padding * 2 <= right - kGridX || size == 10) break;
+    if (first == 0) first = 2;
+    else --size;
+  }
+  int x = right - padding - total;
+  Fill(renderer_, SDL_Rect{x - padding, canvas_height_ - 30, total + padding * 2, 26}, SDL_Color{14, 16, 20, 215});
+  for (int i = first; i < count; ++i) {
+    Fill(renderer_, SDL_Rect{x, canvas_height_ - 26, key_widths[i], 18}, SDL_Color{213, 216, 222, 255});
+    DrawText(keys[i], x + key_widths[i] / 2, canvas_height_ - 26, size, SDL_Color{24, 26, 30, 255}, key_widths[i], true);
+    DrawText(labels[i], x + key_widths[i] + 3, canvas_height_ - 26, size, kInk);
+    x += key_widths[i] + 3 + label_widths[i] + gap;
+  }
+  if (!search_query_.empty()) {
+    const std::string label = "搜索：" + search_query_;
+    int width = 0;
+    if (TTF_Font *font = Font(11)) TTF_SizeUTF8(font, label.c_str(), &width, nullptr);
+    width = std::min(width, right - kGridX - padding * 2);
+    Fill(renderer_, SDL_Rect{right - width - padding * 2, canvas_height_ - 51, width + padding * 2, 20},
+         SDL_Color{14, 16, 20, 215});
+    DrawText(label, right - padding - width, canvas_height_ - 48, 11, kInk, width);
+  }
+}
+
+void GbaFrontend::RenderExitDialog() {
+  Fill(renderer_, SDL_Rect{0, 0, canvas_width_, canvas_height_}, SDL_Color{0, 0, 0, 135});
+  const SDL_Rect viewport{(canvas_width_ - 720) / 2, (canvas_height_ - 480) / 2,
+                          std::max(720, canvas_width_), std::max(480, canvas_height_)};
+  SDL_RenderSetViewport(renderer_, &viewport);
+  Fill(renderer_, SDL_Rect{205, 85, 310, 310}, SDL_Color{66, 69, 76, 255});
+  DrawText("退出", 360, 103, 22, kInk, 270, true);
+  const char *labels[] = {"返回系统", "重启", "关机", "取消"};
+  for (int i = 0; i < 4; ++i) {
+    const SDL_Rect row{220, 147 + i * 57, 280, 48};
+    const bool selected = exit_dialog_selected_ == i;
+    Fill(renderer_, row, selected
+        ? (i == 2 ? SDL_Color{190, 45, 55, 255} : SDL_Color{222, 225, 233, 255})
+        : SDL_Color{82, 85, 94, 255});
+    DrawText(labels[i], 360, row.y + 12, 19,
+             selected && i != 2 ? SDL_Color{24, 26, 30, 255} : kInk, 250, true);
+  }
+  SDL_RenderSetViewport(renderer_, nullptr);
+}
+
+void GbaFrontend::RenderQuickMenu() {
+  const ThemeColors theme = ColorsForTheme(preferences_.theme_color);
+  SDL_Color background = theme.bar;
+  background.a = 228;
+  const int height = kQuickSettingsCount * 31 + 12;
+  const int top = canvas_height_ - 33 - height;
+  Fill(renderer_, SDL_Rect{canvas_width_ - 212, top, 206, height}, background);
+  Stroke(renderer_, SDL_Rect{canvas_width_ - 212, top, 206, height}, theme.selected);
+  const char *bgm[] = {"8bit", "游戏音", "静音"};
+  const char *grid[] = {"大", "中", "小"};
+  const char *filters[] = {"校色", "原色", "自定义"};
+  const char *themes[] = {"金属浅蓝", "金属粉", "金属银", "黑色", "靛蓝", "黄色",
+                          "金属深蓝", "冰川蓝", "绿透", "灰色", "红透"};
+  const std::string labels[] = {
+      search_query_.empty() ? "搜索游戏" : search_query_,
+      "屏幕亮度 " + std::to_string(std::max(0, status_.brightness)),
+      "前端音量 " + std::to_string(std::max(0, status_.volume)),
+      "系统音量 " + (preferences_.system_volume == 0 ? std::string("同步") : std::to_string(preferences_.system_volume)),
+      std::string("背景音乐 ") + bgm[static_cast<int>(preferences_.bgm_mode)],
+      std::string("预览视频 ") + (preferences_.preview_video_loop ? "循环" : "单次"),
+      std::string("封面大小 ") + grid[static_cast<int>(preferences_.grid_size)],
+      std::string("主题 ") + themes[static_cast<int>(preferences_.theme_color)],
+      "封面字号 " + std::to_string(CoverTitleFontSize()),
+      "简介字号 " + std::to_string(DescriptionFontSize()),
+      std::string("封面标题 ") + (preferences_.show_cover_titles ? "显示" : "隐藏"),
+      std::string("游戏滤镜 ") + filters[static_cast<int>(preferences_.filter_mode)],
+  };
+  for (int i = 0; i < kQuickSettingsCount; ++i) {
+    const int y = top + 7 + i * 31;
+    const bool selected = sidebar_selected_ == i;
+    Fill(renderer_, SDL_Rect{canvas_width_ - 205, y, 192, 28},
+         selected ? SDL_Color{222, 225, 233, 235} : SDL_Color{18, 20, 26, 130});
+    const SDL_Color ink = selected ? SDL_Color{24, 26, 30, 255} : kInk;
+    DrawText(labels[i], canvas_width_ - 109, y + 5, 14, ink, 154, true);
+    if (i != 0) DrawText("<", canvas_width_ - 201, y + 4, 16, ink);
+    DrawText(">", canvas_width_ - 27, y + 4, 16, ink);
+  }
+}
+
+void GbaFrontend::RenderSidebar() {
+  if (quick_menu_open_ && !help_open_) { RenderQuickMenu(); return; }
+  Fill(renderer_, SDL_Rect{0, 0, canvas_width_, canvas_height_}, SDL_Color{0, 0, 0, 135});
+  Fill(renderer_, SDL_Rect{canvas_width_ - 246, 0, 246, canvas_height_}, SDL_Color{87, 89, 94, 250});
+  if (help_open_) {
+    DrawText("操作帮助", canvas_width_ - 228, 28, 23, kInk);
+    DrawWrappedText("方向键选择游戏\nA 启动游戏\nB 系统菜单／返回\nX 切换全屏（停止视频）\nY 侧边菜单\nL1 / R1 切换分类\nL2 主题换色\nR2 搜索游戏\nSelect 收藏／取消收藏\nStart 选择核心\n简介自动滚动并循环\n搜索支持中文、全拼和首字母", canvas_width_ - 228, 80, 210, 27, 12, 15, kInk);
+    DrawText("A / B 返回", canvas_width_ - 228, canvas_height_ - 37, 14, kInk);
+    return;
+  }
+  const char *labels[] = {"设置", "帮助", "退出"};
+  for (int i = 0; i < 3; ++i) {
+    const int y = canvas_height_ - 198 + i * 66;
+    if (i == sidebar_selected_)
+      Fill(renderer_, SDL_Rect{canvas_width_ - 246, y, 246, 66}, SDL_Color{157, 159, 167, 255});
+    DrawTextRight(labels[i], canvas_width_ - 21, y + 18, 25, kInk);
+  }
+}
+
+void GbaFrontend::RenderSearch() {
+  Fill(renderer_, SDL_Rect{0, 0, canvas_width_, canvas_height_}, SDL_Color{0, 0, 0, 155});
+  const SDL_Rect viewport{(canvas_width_ - 720) / 2, (canvas_height_ - 480) / 2,
+                          std::max(720, canvas_width_), std::max(480, canvas_height_)};
+  SDL_RenderSetViewport(renderer_, &viewport);
+  Fill(renderer_, SDL_Rect{59, 67, 602, 348}, SDL_Color{56, 59, 66, 255});
+  DrawText("搜索游戏", 84, 84, 22, kInk);
+  DrawText("口袋妖怪 · kou dai yao guai / kdyg", 84, 114, 14, kInk);
+  Fill(renderer_, SDL_Rect{83, 142, 554, 38}, SDL_Color{29, 32, 38, 255});
+  std::string shown = search_draft_ + (search_composition_.empty() ? "_" : " [" + search_composition_ + "]");
+  // Keep the insertion end visible for long queries.
+  int width = 0;
+  if (TTF_Font *font = Font(18)) {
+    while (!shown.empty() && TTF_SizeUTF8(font, shown.c_str(), &width, nullptr) == 0 && width > 524) {
+      size_t end = 1;
+      while (end < shown.size() && (static_cast<unsigned char>(shown[end]) & 0xc0) == 0x80) ++end;
+      shown.erase(0, end);
+    }
+  }
+  DrawText(shown, 93, 150, 18, kInk, 530);
+  for (int row = 0; row < 4; ++row) {
+    const std::string keys = kKeyboardRows[row];
+    for (int col = 0; col < kKeyboardColumns; ++col) {
+      const bool selected = row == keyboard_row_ && col == keyboard_column_;
+      const SDL_Rect box{84 + col * 46, 193 + row * 40, 41, 33};
+      Fill(renderer_, box, selected ? SDL_Color{222, 225, 233, 255} : SDL_Color{82, 85, 94, 255});
+      char ch = keys[col];
+      if (keyboard_upper_) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+      DrawText(std::string(1, ch), box.x + box.w / 2, box.y + 6, 17,
+               selected ? SDL_Color{24, 26, 30, 255} : kInk, 35, true);
+      if (selected) DrawText("A", box.x + box.w - 9, box.y + 1, 8, SDL_Color{24, 26, 30, 255});
+    }
+  }
+  const char *buttons[] = {"L1", "Y", "X", "B", "SELECT", "START"};
+  const int icons[] = {0, 1, 2, 3, 5, 4};
+  for (int col = 0; col < 6; ++col) {
+    const SDL_Rect box{84 + col * 92, 361, 87, 39};
+    const bool selected = keyboard_row_ == 4 && keyboard_column_ / 2 == col;
+    const SDL_Color ink = selected ? SDL_Color{24, 26, 30, 255} : kInk;
+    Fill(renderer_, box, selected ? SDL_Color{222, 225, 233, 255} : SDL_Color{82, 85, 94, 255});
+    DrawText(buttons[col], box.x + 6, box.y + 3, col < 3 ? 11 : 9, ink);
+    if (selected) DrawText("A", box.x + 6, box.y + 22, 10, ink);
+    DrawIcon(icons[col], SDL_Rect{box.x + 51, box.y + 6, 28, 28}, ink);
+  }
+
+  SDL_RenderSetViewport(renderer_, nullptr);
+}
+
+void GbaFrontend::DrawIcon(int index, const SDL_Rect &bounds, SDL_Color color) {
+  if (!icons_texture_) {
+    std::array<Uint8, ui_icons::width * ui_icons::size * 4> pixels{};
+    for (size_t i = 0; i < sizeof(ui_icons::alpha); ++i) {
+      pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = 255;
+      pixels[i * 4 + 3] = ui_icons::alpha[i];
+    }
+    SDL_Texture *texture = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32,
+        SDL_TEXTUREACCESS_STATIC, ui_icons::width, ui_icons::size);
+    if (!texture) return;
+    if (SDL_UpdateTexture(texture, nullptr, pixels.data(), ui_icons::width * 4) != 0) {
+      SDL_DestroyTexture(texture);
+      return;
+    }
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    icons_texture_ = texture;
+  }
+  SDL_SetTextureColorMod(icons_texture_, color.r, color.g, color.b);
+  SDL_SetTextureAlphaMod(icons_texture_, color.a);
+  const SDL_Rect source{index * ui_icons::size, 0, ui_icons::size, ui_icons::size};
+  SDL_RenderCopy(renderer_, icons_texture_, &source, &bounds);
+}
+
 void GbaFrontend::RenderOsd() {
   if (osd_text_.empty()) return;
   if (SDL_GetTicks() >= osd_until_) {
@@ -2158,10 +2580,10 @@ void GbaFrontend::RenderOsd() {
     osd_until_ = 0;
     return;
   }
-  const SDL_Rect box{245, 214, 230, 52};
+  const SDL_Rect box{(canvas_width_ - 230) / 2, (canvas_height_ - 52) / 2, 230, 52};
   Fill(renderer_, box, SDL_Color{18,20,23,235});
   Stroke(renderer_, box, SDL_Color{93,98,106,255});
-  DrawText(osd_text_, 360, 230, 18, SDL_Color{255,255,255,255}, 210, true);
+  DrawText(osd_text_, canvas_width_ / 2, box.y + 16, 18, SDL_Color{255,255,255,255}, 210, true);
 }
 
 void GbaFrontend::DrawText(const std::string &text, int x, int y, int size, SDL_Color color,
@@ -2451,12 +2873,15 @@ bool GbaFrontend::WriteLaunchRequest(const GbaGame &game, const std::string &rom
   std::ofstream output(path, std::ios::trunc | std::ios::binary);
   const char *filter_modes[] = {"calibrated", "original", "custom"};
   output << rom_path << '\n' << GbaLaunchCoreName(game) << '\n'
-         << filter_modes[static_cast<int>(preferences_.filter_mode)] << '\n';
+         << filter_modes[static_cast<int>(preferences_.filter_mode)] << '\n'
+         << preferences_.system_volume << '\n';
   return static_cast<bool>(output);
 }
 
 bool GbaFrontend::SaveScreenshot(const std::string &path) {
-  SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, 720, 480, 32, SDL_PIXELFORMAT_ARGB8888);
+  int width = 0, height = 0;
+  if (SDL_GetRendererOutputSize(renderer_, &width, &height) != 0) return false;
+  SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
   if (!surface) return false;
   const bool okay = SDL_RenderReadPixels(renderer_, nullptr, SDL_PIXELFORMAT_ARGB8888,
                                          surface->pixels, surface->pitch) == 0 &&

@@ -42,6 +42,7 @@ struct GbaGame {
   bool is_mod = false;
   bool is_rumble = false;
   bool favorite = false;
+  std::uint64_t favorite_order = 0;
   std::uint64_t recent_order = 0;
   GbaCore default_core = GbaCore::Mgba;
   GbaCore core = GbaCore::Mgba;

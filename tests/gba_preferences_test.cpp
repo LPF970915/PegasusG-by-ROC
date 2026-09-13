@@ -25,6 +25,8 @@ int main() {
   assert(preferences.description_size_level == 4);
   assert(preferences.show_cover_titles);
   assert(!preferences.fullscreen_grid);
+  assert(preferences.system_volume == 0);
+  assert(!preferences.super_standby);
 
   preferences.bgm_mode = GbaBgmMode::EightBit;
   preferences.preview_video_loop = false;
@@ -37,6 +39,8 @@ int main() {
   preferences.description_size_level = 5;
   preferences.show_cover_titles = false;
   preferences.fullscreen_grid = true;
+  preferences.system_volume = 8;
+  preferences.super_standby = true;
   assert(store.Save(preferences));
 
   GbaPreferences loaded;
@@ -52,12 +56,16 @@ int main() {
   assert(loaded.description_size_level == 5);
   assert(!loaded.show_cover_titles);
   assert(loaded.fullscreen_grid);
+  assert(loaded.system_volume == 8);
+  assert(loaded.super_standby);
 
   std::ofstream(path, std::ios::trunc) << "1 0 0\n";
   loaded.theme_color = GbaThemeColor::MetalBlue;
+  loaded.super_standby = true;
   assert(store.Load(&loaded));
   assert(loaded.bgm_mode == GbaBgmMode::EightBit);
   assert(loaded.preview_video_loop);
+  assert(!loaded.super_standby);
   assert(loaded.grid_size == GbaGridSize::Large);
   assert(loaded.theme_color == GbaThemeColor::Black);
   assert(loaded.filter_mode == GbaFilterMode::Calibrated);
@@ -109,6 +117,19 @@ int main() {
   std::ofstream(path, std::ios::trunc) << "9 0 0 3 3 4 1 0 1 0 2\n";
   assert(!store.Load(&loaded));
   std::ofstream(path, std::ios::trunc) << "10 0 0 3 3 4 1 0 1 0 1 2\n";
+  assert(!store.Load(&loaded));
+  std::ofstream(path, std::ios::trunc) << "10 0 0 3 3 4 1 0 1 0 1 1\n";
+  loaded.system_volume = 7;
+  assert(store.Load(&loaded));
+  assert(loaded.system_volume == 0);
+  std::ofstream(path, std::ios::trunc) << "11 0 0 3 3 4 1 0 1 0 1 1 10\n";
+  assert(!store.Load(&loaded));
+  std::ofstream(path, std::ios::trunc) << "11 0 0 3 3 4 1 0 1 0 1 1 8\n";
+  loaded.super_standby = true;
+  assert(store.Load(&loaded) && !loaded.super_standby && loaded.system_volume == 8);
+  std::ofstream(path, std::ios::trunc) << "12 0 0 3 3 4 1 0 1 0 1 1 8 2\n";
+  assert(!store.Load(&loaded));
+  std::ofstream(path, std::ios::trunc) << "12 0 0 3 3 4 1 0 1 0 1 1 8\n";
   assert(!store.Load(&loaded));
   fs::remove_all(root);
   return 0;

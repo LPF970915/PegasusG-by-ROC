@@ -196,6 +196,8 @@ launch_requested_game() {
   IFS= read -r rom <"$REQUEST" || rom=""
   core_choice="$(sed -n '2p' "$REQUEST")"
   filter_mode="$(sed -n '3p' "$REQUEST")"
+  system_volume="$(sed -n '4p' "$REQUEST")"
+  case "$system_volume" in 0|1|2|3|4|5|6|7|8|9) ;; *) system_volume=-1 ;; esac
   rm -f "$REQUEST"
   case "$filter_mode" in calibrated|original|custom) ;; *) filter_mode=calibrated ;; esac
   case "$rom" in
@@ -244,7 +246,7 @@ launch_requested_game() {
     log_line "[launcher] game override script missing: $GAME_OVERRIDES_SCRIPT"
   fi
   game_volume_ready=0
-  if [ -x "$GAME_VOLUME_SCRIPT" ] && "$GAME_VOLUME_SCRIPT" prepare; then
+  if [ -x "$GAME_VOLUME_SCRIPT" ] && "$GAME_VOLUME_SCRIPT" prepare "$system_volume"; then
     game_volume_ready=1
     set_game_hardware_volume || {
       game_volume_ready=0
@@ -259,7 +261,7 @@ launch_requested_game() {
   unset LD_PRELOAD
   /mnt/mod/ctrl/RA_launch.sh "$core" "$launch_rom" auto >>"$LOG_FILE" 2>&1
   rc=$?
-  if [ "$game_volume_ready" -eq 1 ]; then
+  if [ "$game_volume_ready" -eq 1 ] && [ "$system_volume" -eq -1 ]; then
     "$GAME_VOLUME_SCRIPT" capture || log_line "[launcher] failed to preserve game volume"
   fi
   if [ -x "$GAME_OVERRIDES_SCRIPT" ]; then
@@ -279,12 +281,17 @@ suspend_system() {
     log_line "[launcher] power script missing: $POWER_SCRIPT"
     return 1
   fi
-  if [ "$automatic" -eq 1 ]; then
-    # The vendor menu writes bit 0x10 here during startup. The battery driver
-    # converts it to os_sleep_type=1, which arms hall-open as a wake source.
-    if [ -w "$OS_SLEEP_NODE" ]; then
-      printf 16 >"$OS_SLEEP_NODE"
+  # Super Standby (nonzero) disables hall wake. Lid sleep needs normal standby.
+  sleep_mode=16
+  if [ "$automatic" -eq 1 ]; then sleep_mode="${2:-0}"; fi
+  if [ -e "$OS_SLEEP_NODE" ]; then
+    if ! printf '%s' "$sleep_mode" >"$OS_SLEEP_NODE"; then
+      log_line "[launcher] failed to set sleep mode=$sleep_mode"
+      return 1
     fi
+    log_line "[launcher] sleep mode=$sleep_mode"
+  fi
+  if [ "$automatic" -eq 1 ]; then
     log_line "[launcher] suspending reason=hall"
     "$POWER_SCRIPT" auto >>"$LOG_FILE" 2>&1
   else
@@ -348,11 +355,6 @@ export PEGASUSG_CONTENT_ROOTS="${PEGASUSG_CONTENT_ROOTS:-/mnt/mmc/Roms/GBA:/mnt/
 export PEGASUSG_DIAGNOSTICS="${PEGASUSG_DIAGNOSTICS:-1}"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME"
 
-if [ -w "$OS_SLEEP_NODE" ]; then
-  printf 16 >"$OS_SLEEP_NODE"
-  log_line "[launcher] hall wake mode enabled"
-fi
-
 while :; do
   if [ "$first_frontend" -eq 1 ]; then
     run_frontend "$@"
@@ -378,8 +380,10 @@ while :; do
     reuse_bgm=1
     continue
   fi
-  if [ "$rc" -eq 22 ]; then
-    suspend_system 1 || true
+  if [ "$rc" -eq 22 ] || [ "$rc" -eq 25 ]; then
+    if [ "$rc" -eq 25 ]; then suspend_system 1 16 || true
+    else suspend_system 1 || true
+    fi
     reuse_bgm=1
     continue
   fi

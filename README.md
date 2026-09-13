@@ -52,15 +52,50 @@ permits redistribution.
 
 ## H700 Cross Build
 
-The H700 build needs an AArch64 compiler and a sysroot from the target firmware.
-The sysroot is deliberately not committed. Put it at `H700/sysroot/` or pass
-one explicitly:
+Use the existing build entry point with either the firmware sysroot or the
+PortMaster Docker image. Both builders use the same source list, staging,
+resource validation and packaging steps.
+
+With an AArch64 compiler and target firmware sysroot (the default), including
+SDL2 >= 2.0.18, SDL2_image, SDL2_ttf and ALSA headers and libraries:
 
 ```powershell
-.\H700\build_app.ps1 `
-  -Version 1.08 `
-  -Output Stage `
-  -Sysroot 'D:\path\to\h700\sysroot'
+.\H700\build_app.ps1 -Version 1.08 -Output Stage -Sysroot 'D:\path\to\h700\sysroot'
+```
+
+For Docker on Windows, install WSL 2 and Docker Desktop with
+[WSL integration](https://docs.docker.com/desktop/features/wsl/) enabled for
+the distribution used below. Docker must be able to run `linux/arm64`
+containers. The WSL distribution needs Bash and Python 3 for packaging.
+No firmware sysroot or host SDL development packages are needed for this build.
+
+```powershell
+.\H700\build_app.ps1 -Builder Docker -Distro Ubuntu-24.04 -Version 1.08 -Output Zip
+```
+
+On Linux or directly inside WSL:
+
+```sh
+PEGASUSG_BUILDER=Docker PEGASUSG_OUTPUT=Zip bash H700/build_app.sh
+```
+
+The builder pulls
+`ghcr.io/monkeyx-net/portmaster-build-templates/portmaster-builder:aarch64-latest`
+if absent, then compiles offline in the container. Set `PEGASUSG_BUILDER_IMAGE`
+to use a locally available version or digest. Docker Desktop includes ARM
+emulation; a standalone Docker Engine on an x86 host needs an ARM64 binfmt/QEMU
+handler. The application still uses the firmware libraries on the device.
+
+`-Output Stage` produces `H700/dist_app/release_stage/`; `-Output Zip` also
+creates the full package in `H700/Downloads/`. To package the existing H700
+binary again without compiling, use the same entry point:
+
+```powershell
+.\H700\build_app.ps1 -SkipBuild -Output Zip -Version 1.08 -Distro Ubuntu-24.04
+```
+
+```sh
+make packzip VERSION=1.08
 ```
 
 The default package includes the 11 tracks in `assets/music/builtin/`. To stage
@@ -79,6 +114,28 @@ The resulting archives are written to `H700/Downloads/`, which is ignored by
 Git except for formal versioned frontend packages and the directory README.
 Each formal package is also published through the matching GitHub Release.
 See `docs/PORTING_GUIDE.md` before adapting the launcher to another machine.
+
+## Controls and Search
+
+- **B / Menu** opens Settings, Help and Exit over the dimmed main screen.
+  Exit asks whether to return to the system, restart, shut down or cancel.
+- **Y** opens quick settings and a search field; **R2** opens search directly.
+- **X** toggles the full-screen grid and stops video preview in this mode.
+- **L2** cycles theme colours, including while quick settings are open.
+- Descriptions scroll automatically. A compact control overlay stays inside
+  the grid area; favourites have a heart in the upper-right cover corner and
+  appear first in each category in the order they were added.
+- Search accepts Chinese, full pinyin and initials, with an offline controller
+  keyboard. **L1** changes case, **X** deletes (hold to repeat), **B** cancels,
+  **Y** inserts a space, **Select** clears and **Start** applies the query.
+- Settings includes Default Standby (lid-open wake, the default) and Super
+  Standby (power-button wake). Update the launcher with the executable.
+- Frontend Volume controls the frontend. System Volume defaults to Sync,
+  inheriting the frontend volume at game startup, or can use a fixed level
+  from 1 to 9. Both settings are available in quick settings.
+
+See [H700 controls and packaging](H700/README.md) for details. `make test`
+includes search and controller interaction checks using synthetic game data.
 
 ## Runtime Content
 

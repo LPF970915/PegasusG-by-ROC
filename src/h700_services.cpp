@@ -154,7 +154,7 @@ bool H700Services::Suspend(bool automatic) const {
   const char *script = "/mnt/vendor/ctrl/pwr_new.sh";
   std::error_code error;
   if (!fs::is_regular_file(script, error)) return false;
-  if (automatic) WriteInt(std::string(kBatteryRoot) + "/os_sleep", 16);
+  WriteInt(std::string(kBatteryRoot) + "/os_sleep", automatic ? 0 : 16);
   const std::string command = std::string(script) + (automatic ? " auto" : "");
   return std::system(command.c_str()) == 0;
 }
